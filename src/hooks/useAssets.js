@@ -1,84 +1,63 @@
 import { useState, useEffect, useCallback } from 'react'
+import { bytesToBase64, base64ToBytes } from '../lib/serialize.js'
+import { listAssets, addAsset, removeAsset } from '../lib/db.js'
 
-const LS_KEY = 'tileset_studio_assets'
-
-// ── base64 (de)serialization for the pixel buffers ──────────────────────────
-function bytesToBase64(bytes) {
-  let bin = ''
-  const chunk = 0x8000
-  for (let i = 0; i < bytes.length; i += chunk) {
-    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk))
-  }
-  return btoa(bin)
-}
-
-function base64ToBytes(b64) {
-  const bin = atob(b64)
-  const out = new Uint8ClampedArray(bin.length)
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
-  return out
-}
-
-function serialize(assets) {
-  return JSON.stringify(assets.map(a => ({
-    id: a.id, name: a.name, cols: a.cols, rows: a.rows, tileSize: a.tileSize,
-    pixels: bytesToBase64(a.pixels),
-  })))
-}
-
-function deserialize(json) {
-  try {
-    const arr = JSON.parse(json)
-    if (!Array.isArray(arr)) return []
-    return arr.map(a => ({ ...a, pixels: base64ToBytes(a.pixels) }))
-  } catch {
-    return []
+// Maps a Supabase row → in-app asset (pixels as Uint8ClampedArray)
+function rowToAsset(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    cols: row.cols,
+    rows: row.rows,
+    tileSize: row.tile_size,
+    pixels: base64ToBytes(row.pixels),
   }
 }
 
-function loadAssets() {
-  const raw = localStorage.getItem(LS_KEY)
-  return raw ? deserialize(raw) : []
-}
-
-// Gallery of saved props, persisted to localStorage.
+// Gallery of saved props, persisted in Supabase (shared, no login).
 export function useAssets() {
-  const [assets, setAssets] = useState(loadAssets)
+  const [assets, setAssets] = useState([])
   const [selectedId, setSelectedId] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
 
-  // Persist on every change
   useEffect(() => {
-    try {
-      localStorage.setItem(LS_KEY, serialize(assets))
-    } catch (e) {
-      console.warn('Could not persist assets (localStorage full?):', e)
-    }
-  }, [assets])
-
-  const add = useCallback(({ name, cols, rows, tileSize, pixels }) => {
-    const id = (crypto?.randomUUID?.() ?? String(Date.now() + Math.random()))
-    const asset = { id, name: name || 'prop', cols, rows, tileSize, pixels: new Uint8ClampedArray(pixels) }
-    setAssets(prev => [...prev, asset])
-    setSelectedId(id)
-    return id
+    let cancelled = false
+    listAssets()
+      .then(rows => { if (!cancelled) setAssets(rows.map(rowToAsset)) })
+      .catch(e => { if (!cancelled) setError(e.message) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
   }, [])
 
-  const remove = useCallback((id) => {
+  const add = useCallback(async ({ name, cols, rows, tileSize, pixels }) => {
+    setError('')
+    try {
+      const row = await addAsset({ name: name || 'prop', cols, rows, tileSize, pixelsB64: bytesToBase64(pixels) })
+      const asset = rowToAsset(row)
+      setAssets(prev => [...prev, asset])
+      setSelectedId(asset.id)
+      return asset.id
+    } catch (e) {
+      setError(e.message)
+      return null
+    }
+  }, [])
+
+  const remove = useCallback(async (id) => {
+    setError('')
+    // optimistic
     setAssets(prev => prev.filter(a => a.id !== id))
     setSelectedId(prev => (prev === id ? null : prev))
-  }, [])
-
-  const update = useCallback((id, patch) => {
-    setAssets(prev => prev.map(a => (a.id === id ? { ...a, ...patch } : a)))
-  }, [])
-
-  const rename = useCallback((id, name) => {
-    setAssets(prev => prev.map(a => (a.id === id ? { ...a, name } : a)))
+    try {
+      await removeAsset(id)
+    } catch (e) {
+      setError(e.message)
+    }
   }, [])
 
   const select = useCallback((id) => setSelectedId(id), [])
-
   const getById = useCallback((id) => assets.find(a => a.id === id) || null, [assets])
 
-  return { assets, selectedId, add, remove, update, rename, select, getById }
+  return { assets, selectedId, loading, error, add, remove, select, getById }
 }

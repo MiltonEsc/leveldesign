@@ -40,7 +40,8 @@ function drawTile(mask, tileSize, colors, params) {
     drawCrackedPattern(data, s, pr, pg, pb, sr, sg, sb)
   }
 
-  const ew = params.edgeWidth
+  // Border scales with tile size so it stays visible on large tiles (e.g. 64px)
+  const ew = Math.max(params.edgeWidth, Math.round(tileSize / 8))
 
   // Step 3: Draw border strips (exposed cardinal edges)
   if (!t) fillRegion(data, s, 0,      0,      s,  ew, boR, boG, boB, 255)

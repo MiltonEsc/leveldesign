@@ -6,23 +6,18 @@ const STYLE_PREFIX =
   'Pixel art video-game terrain tile texture, top-down view, seamless tileable, ' +
   'flat shading, simple, no border, no text, fills the entire square frame. Subject: '
 
+// OpenAI retired dall-e-2/dall-e-3; the available image models are the
+// gpt-image family. gpt-image-1 is the proven default.
 export const AI_MODELS = [
-  { id: 'gpt-image-1', label: 'gpt-image-1 (best, needs verified org)' },
-  { id: 'dall-e-3',    label: 'DALL·E 3 (1024px)' },
-  { id: 'dall-e-2',    label: 'DALL·E 2 (cheap, fast)' },
+  { id: 'gpt-image-1',      label: 'gpt-image-1 (stable)' },
+  { id: 'gpt-image-1-mini', label: 'gpt-image-1-mini (fast, cheap)' },
+  { id: 'gpt-image-1.5',    label: 'gpt-image-1.5' },
+  { id: 'gpt-image-2',      label: 'gpt-image-2 (newest)' },
 ]
 
 function buildBody(model, prompt) {
-  // response_format is no longer accepted by the API; gpt-image-1 returns
-  // b64_json, while dall-e-2/3 return a url by default.
-  if (model === 'gpt-image-1') {
-    return { model, prompt, size: '1024x1024', n: 1, quality: 'low' }
-  }
-  if (model === 'dall-e-3') {
-    return { model, prompt, size: '1024x1024', n: 1 }
-  }
-  // dall-e-2 — small size is plenty for a downscaled tile
-  return { model, prompt, size: '256x256', n: 1 }
+  // All gpt-image models return b64_json and take size/quality (no response_format).
+  return { model, prompt, size: '1024x1024', n: 1, quality: 'low' }
 }
 
 // Downscales an image (data URL or remote URL) to tileSize×tileSize RGBA pixels.

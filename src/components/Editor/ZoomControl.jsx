@@ -1,6 +1,6 @@
 export function ZoomControl({ zoom, setZoom, tileSize }) {
-  const min = 4
-  const max = tileSize === 8 ? 32 : 20
+  const min = tileSize >= 64 ? 2 : 4
+  const max = tileSize === 8 ? 32 : tileSize === 16 ? 20 : 12
 
   return (
     <div className="zoom-control">

@@ -139,6 +139,15 @@ export function drawRectInto(data, width, height, x0, y0, x1, y1, brush, rgba, f
   }
 }
 
+// Binarizes alpha: pixels with alpha >= threshold become fully opaque (255),
+// everything below becomes fully transparent (0). Removes the semi-transparent
+// edge "halo" so a sprite is solid with hard edges.
+export function solidifyAlpha(data, threshold) {
+  for (let i = 3; i < data.length; i += 4) {
+    data[i] = data[i] >= threshold ? 255 : 0
+  }
+}
+
 // Bayer 4x4 ordered dither matrix (normalized 0..1)
 const BAYER_4x4 = [
   [ 0, 8, 2,10],

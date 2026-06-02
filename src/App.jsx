@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { PixelCanvas }        from './components/Editor/PixelCanvas.jsx'
 import { ToolBar }            from './components/Editor/ToolBar.jsx'
 import { PaletteRow }         from './components/Editor/PaletteRow.jsx'
@@ -10,17 +10,23 @@ import { GenerateButton }     from './components/Generator/GenerateButton.jsx'
 import { AITilePanel }        from './components/Generator/AITilePanel.jsx'
 import { TileSheetPreview }   from './components/TileSheet/TileSheetPreview.jsx'
 import { ExportButton }       from './components/TileSheet/ExportButton.jsx'
+import { TilesetGallery }     from './components/TileSheet/TilesetGallery.jsx'
 import { BiomeGallery }       from './components/BiomeGallery/BiomeGallery.jsx'
 import { LevelCanvas }        from './components/Level/LevelCanvas.jsx'
 import { LevelControls }      from './components/Level/LevelControls.jsx'
+import { PropPicker }         from './components/Level/PropPicker.jsx'
+import { LevelStorage }       from './components/Level/LevelStorage.jsx'
 import { AssetsView }         from './components/Assets/AssetsView.jsx'
 import { useDrawingCanvas }   from './hooks/useDrawingCanvas.js'
 import { useTilesheet }       from './hooks/useTilesheet.js'
 import { useLevelMap }        from './hooks/useLevelMap.js'
 import { useAssets }          from './hooks/useAssets.js'
-import { BIOMES }             from './constants/biomes.js'
+import { useTilesets }        from './hooks/useTilesets.js'
+import { useLevels }          from './hooks/useLevels.js'
+import { BIOMES, BIOME_MAP }  from './constants/biomes.js'
 import { GENERATORS }         from './core/levelGenerator.js'
 import { clampCellPx } from './components/Level/zoomConfig.js'
+import { bytesToBase64, base64ToBytes } from './lib/serialize.js'
 
 export default function App() {
   const [activeView, setActiveView] = useState('tileset') // 'tileset' | 'level'
@@ -31,11 +37,38 @@ export default function App() {
   const tilesheet = useTilesheet()
   const level     = useLevelMap(32, 20)
   const assets    = useAssets()
+  const tilesets  = useTilesets()
+  const levels    = useLevels()
 
   const [cellPx, setCellPxRaw]        = useState(18)
   const [showLevelGrid, setShowLevelGrid] = useState(true)
   const [levelSidebarCollapsed, setLevelSidebarCollapsed] = useState(false)
+  const [levelTool, setLevelTool]     = useState('terrain') // 'terrain' | 'props'
   const levelCanvasAreaRef = useRef(null)
+
+  // Lookup of saved props by id, for placing/drawing on the level
+  const assetsById = useMemo(
+    () => Object.fromEntries(assets.assets.map(a => [a.id, a])),
+    [assets.assets]
+  )
+
+  const handlePlaceProp = useCallback((x, y) => {
+    if (assets.selectedId == null) return
+    level.addProp(assets.selectedId, x, y)
+  }, [assets.selectedId, level])
+
+  // Remove the topmost placed prop whose footprint covers cell (x,y)
+  const handleRemovePropAt = useCallback((x, y) => {
+    for (let i = level.placedProps.length - 1; i >= 0; i--) {
+      const p = level.placedProps[i]
+      const a = assetsById[p.assetId]
+      if (!a) continue
+      if (x >= p.x && x < p.x + a.cols && y >= p.y && y < p.y + a.rows) {
+        level.removeProp(p.id)
+        return
+      }
+    }
+  }, [level, assetsById])
 
   // Clamp every cellPx update to the shared zoom bounds
   const setCellPx = useCallback((next) => {
@@ -94,6 +127,70 @@ export default function App() {
     setLocalBiome(prev => ({ ...prev, colors: { ...prev.colors, [key]: value } }))
   }
 
+  // Builds the definition that regenerates the current tileset's 48 tiles.
+  const currentTilesetDefinition = useCallback(() => (
+    mode === 'draw'
+      ? { mode: 'draw', basePixels: bytesToBase64(drawing.committedPixels) }
+      : { mode: 'procedural', biomeId: localBiome.id, colors: localBiome.colors }
+  ), [mode, drawing.committedPixels, localBiome])
+
+  // Regenerates the 48 tiles from a saved tileset definition at `size`.
+  const applyTilesetDefinition = useCallback((def, size) => {
+    if (!def) return
+    if (def.mode === 'draw') {
+      setMode('draw')
+      const bytes = base64ToBytes(def.basePixels)
+      const side = Math.round(Math.sqrt(bytes.length / 4))
+      tilesheet.generateFromBitmap(new ImageData(new Uint8ClampedArray(bytes), side, side), size)
+      return bytes
+    }
+    setMode('procedural')
+    const base = BIOME_MAP[def.biomeId] || BIOMES[0]
+    const biome = { ...base, colors: { ...base.colors, ...def.colors } }
+    setLocalBiome(biome)
+    tilesheet.generateFromBiome(biome, size)
+    return null
+  }, [tilesheet])
+
+  const handleSaveTileset = useCallback((name) => {
+    tilesets.save({ name, tileSize, definition: currentTilesetDefinition() })
+  }, [tilesets, tileSize, currentTilesetDefinition])
+
+  const handleLoadTileset = useCallback((row) => {
+    const size = row.tile_size
+    setTileSize(size)
+    drawing.resetCanvas(size)
+    const bytes = applyTilesetDefinition(row.definition, size)
+    if (bytes) drawing.loadPixels(bytes)
+  }, [drawing, applyTilesetDefinition])
+
+  const handleSaveLevel = useCallback((name) => {
+    levels.save({
+      name,
+      width: level.width,
+      height: level.height,
+      tileSize,
+      gridB64: bytesToBase64(level.grid),
+      placedProps: level.placedProps,
+      tileset: currentTilesetDefinition(),
+      seamlessEdges: level.seamlessEdges,
+    })
+  }, [levels, level, tileSize, currentTilesetDefinition])
+
+  const handleLoadLevel = useCallback((row) => {
+    const size = row.tile_size
+    setTileSize(size)
+    drawing.resetCanvas(size)
+    applyTilesetDefinition(row.tileset, size)
+    level.loadState({
+      width: row.width,
+      height: row.height,
+      grid: base64ToBytes(row.grid),
+      placedProps: row.placed_props,
+    })
+    level.setSeamlessEdges(!!row.seamless_edges)
+  }, [drawing, applyTilesetDefinition, level])
+
   const handleSurprise = useCallback(() => {
     const keys = Object.keys(GENERATORS)
     const key = keys[Math.floor(Math.random() * keys.length)]
@@ -121,7 +218,7 @@ export default function App() {
         <div className="header-controls">
           <span className="tile-size-label">Tile size:</span>
           <div className="tile-size-toggle">
-            {[8, 16].map(s => (
+            {[8, 16, 64].map(s => (
               <button key={s} className={`tile-size-btn ${tileSize === s ? 'active' : ''}`} onClick={() => handleTileSizeChange(s)}>
                 {s}×{s}
               </button>
@@ -187,6 +284,13 @@ export default function App() {
             <aside className="preview-panel">
               <TileSheetPreview tiles={tilesheet.tiles} tileSize={tileSize} />
               <ExportButton tiles={tilesheet.tiles} tileSize={tileSize} biomeName={localBiome?.id} />
+              <TilesetGallery
+                tilesets={tilesets.tilesets}
+                defaultName={mode === 'draw' ? 'Drawn tileset' : localBiome.label}
+                onSave={handleSaveTileset}
+                onLoad={handleLoadTileset}
+                onRemove={tilesets.remove}
+              />
             </aside>
           </main>
 
@@ -202,18 +306,36 @@ export default function App() {
           <main className={`app-main level-main ${levelSidebarCollapsed ? 'level-main-collapsed' : ''}`}>
             <aside className={`sidebar level-sidebar ${levelSidebarCollapsed ? 'collapsed' : ''}`}>
               {!levelSidebarCollapsed && (
-                <LevelControls
-                  width={level.width} height={level.height}
-                  cellPx={cellPx} setCellPx={setCellPx}
-                  showGrid={showLevelGrid} setShowGrid={setShowLevelGrid}
-                  seamlessEdges={level.seamlessEdges} setSeamlessEdges={level.setSeamlessEdges}
-                  onGenerate={(type) => level.generate(type)}
-                  onClear={level.clear}
-                  onFill={level.fillAll}
-                  onResize={level.resize}
-                  onRandomizeAll={handleSurprise}
-                  onFit={handleFitLevel}
-                />
+                <>
+                  <LevelControls
+                    width={level.width} height={level.height}
+                    cellPx={cellPx} setCellPx={setCellPx}
+                    showGrid={showLevelGrid} setShowGrid={setShowLevelGrid}
+                    seamlessEdges={level.seamlessEdges} setSeamlessEdges={level.setSeamlessEdges}
+                    onGenerate={(type) => level.generate(type)}
+                    onClear={level.clear}
+                    onFill={level.fillAll}
+                    onResize={level.resize}
+                    onRandomizeAll={handleSurprise}
+                    onFit={handleFitLevel}
+                    levelTool={levelTool} setLevelTool={setLevelTool}
+                  />
+                  {levelTool === 'props' && (
+                    <PropPicker
+                      assets={assets.assets}
+                      selectedId={assets.selectedId}
+                      onSelect={assets.select}
+                      placedCount={level.placedProps.length}
+                      onClearProps={level.clearProps}
+                    />
+                  )}
+                  <LevelStorage
+                    levels={levels.levels}
+                    onSave={handleSaveLevel}
+                    onLoad={handleLoadLevel}
+                    onRemove={levels.remove}
+                  />
+                </>
               )}
             </aside>
 
@@ -233,6 +355,12 @@ export default function App() {
                   onStartPaint={level.startPaint}
                   onContinuePaint={level.continuePaint}
                   onEndPaint={() => {}}
+                  levelTool={levelTool}
+                  placedProps={level.placedProps}
+                  assetsById={assetsById}
+                  selectedAssetId={assets.selectedId}
+                  onPlaceProp={handlePlaceProp}
+                  onRemovePropAt={handleRemovePropAt}
                 />
               ) : (
                 <div className="level-empty">Generate a tileset first in the Tileset view.</div>

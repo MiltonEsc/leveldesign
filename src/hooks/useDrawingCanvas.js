@@ -19,12 +19,15 @@ export function useDrawingCanvas(tileSize) {
     return data
   }
 
+  // Default zoom so the editor canvas is ~360px wide for any tile size
+  const defaultZoom = (size) => ({ 8: 16, 16: 10, 64: 6 }[size] ?? Math.max(2, Math.round(360 / size)))
+
   const [pixels, setPixels]   = useState(() => makeBlankPixels(tileSize))
   const [preview, setPreview] = useState(null) // live shape preview overlay
   const [tool, setTool]       = useState('pencil')
   const [brush, setBrush]     = useState(1)
   const [activeColor, setActiveColor] = useState('#4a7c2f')
-  const [zoom, setZoom]       = useState(tileSize === 8 ? 16 : 10)
+  const [zoom, setZoom]       = useState(() => defaultZoom(tileSize))
   const [history, setHistory] = useState([])
   const [historyIndex, setHistoryIndex] = useState(-1)
 
@@ -43,6 +46,7 @@ export function useDrawingCanvas(tileSize) {
       }
     }
     setPixels(data); setPreview(null); setHistory([]); setHistoryIndex(-1)
+    setZoom(defaultZoom(size))
   }, [])
 
   const pushHistory = useCallback((snapshot) => {

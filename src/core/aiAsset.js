@@ -8,29 +8,43 @@ export { AI_MODELS }
 
 const API_BASE = import.meta.env.DEV ? '/openai/v1' : 'https://api.openai.com/v1'
 
-const STYLE_PREFIX_ASSET =
-  'Pixel art video-game prop sprite, single centered object, transparent background, ' +
-  'no ground, no shadow, no border, no text, flat shading, crisp pixels. Subject: '
+const STYLE_BASE =
+  'Low-resolution pixel art game sprite of a single centered object. ' +
+  'Flat solid colors, limited palette, clean readable silhouette, hard blocky pixel edges. ' +
+  'NO anti-aliasing, NO blur, NO soft shading, NO gradients, NO noise, NO outline speckles. '
+// Background clause depends on whether the model supports a real alpha channel.
+const BG_TRANSPARENT = 'Transparent background, no ground, no cast shadow, no text. Subject: '
+const BG_SOLID = 'Plain solid flat magenta (#FF00FF) background filling all empty space, no ground, no cast shadow, no text. Subject: '
 
-// Corner-sampled chroma key: for models without native transparency (dall-e),
-// make pixels close to the sampled background color fully transparent.
-const CHROMA_TOLERANCE = 28
+// Corner-sampled chroma key: for models without native transparency, make
+// pixels close to the sampled background color fully transparent.
+const CHROMA_TOLERANCE = 60
 
-// Below this alpha a downscaled pixel is treated as background (cleared);
-// at/above it the pixel is snapped to fully opaque. Removes the blurry,
-// semi-transparent "ghost" halo and keeps sprites crisp and solid.
-const ALPHA_THRESHOLD = 110
+// Color bands per RGB channel after downscaling. Lower = flatter / more
+// stylized; higher = more color fidelity but softer. 6 is a good pixel-art middle.
+const POSTERIZE_LEVELS = 6
 
-function buildBody(model, prompt) {
-  if (model === 'gpt-image-1') {
-    // gpt-image-1 supports a real alpha channel via background: 'transparent'
-    return { model, prompt, size: '1024x1024', n: 1, quality: 'low', background: 'transparent' }
-  }
-  if (model === 'dall-e-3') {
-    return { model, prompt, size: '1024x1024', n: 1 }
-  }
-  // dall-e-2 — small is plenty for a downscaled prop
-  return { model, prompt, size: '256x256', n: 1 }
+function buildBody(model, prompt, transparent) {
+  const body = { model, prompt, size: '1024x1024', n: 1, quality: 'low' }
+  if (transparent) body.background = 'transparent'
+  return body
+}
+
+async function requestImage(apiKey, body) {
+  return fetch(`${API_BASE}/images/generations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify(body),
+  })
+}
+
+async function readError(res) {
+  let msg = `OpenAI request failed (HTTP ${res.status}).`
+  try {
+    const err = await res.json()
+    if (err?.error?.message) msg = err.error.message
+  } catch { /* ignore parse error */ }
+  return msg
 }
 
 // Removes a near-uniform background by sampling the 4 corners (for opaque models).
@@ -54,11 +68,26 @@ function chromaKey(data, w, h, tolerance = CHROMA_TOLERANCE) {
   }
 }
 
-// Snaps alpha to 0 or 255 around a threshold so the sprite is solid with clean
-// edges instead of a blurry semi-transparent halo.
-function cleanAlpha(data, threshold = ALPHA_THRESHOLD) {
+// Removes the magenta halo left by anti-aliased edges over the chroma-key
+// background: pixels where red AND blue clearly dominate green are magenta-tinted.
+function deFringeMagenta(data) {
   for (let i = 0; i < data.length; i += 4) {
-    data[i + 3] = data[i + 3] >= threshold ? 255 : 0
+    if (data[i + 3] === 0) continue
+    const r = data[i], g = data[i + 1], b = data[i + 2]
+    if (r - g > 60 && b - g > 60) data[i + 3] = 0
+  }
+}
+
+// Quantizes each RGB channel of opaque pixels to `levels` steps. AI images come
+// with soft gradient shading that looks blurry when scaled up; flattening to a
+// few color bands makes the sprite read as crisp, deliberate pixel art.
+function posterize(data, levels = POSTERIZE_LEVELS) {
+  const step = 255 / (levels - 1)
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] === 0) continue
+    data[i]     = Math.round(Math.round(data[i]     / step) * step)
+    data[i + 1] = Math.round(Math.round(data[i + 1] / step) * step)
+    data[i + 2] = Math.round(Math.round(data[i + 2] / step) * step)
   }
 }
 
@@ -95,9 +124,10 @@ function stepDownToCanvas(img, pxW, pxH) {
   return out
 }
 
-// Downscales an image to pxW×pxH RGBA, preserving + cleaning alpha. If `keyOut`
-// is true, applies corner chroma-keying first (for models that return opaque
-// images), so the threshold cleanup then removes the keyed-out halo.
+// Downscales an image to pxW×pxH RGBA. If `keyOut` is true, applies corner
+// chroma-keying first (for models that return opaque images). Colors are
+// posterized for a crisp look; alpha is left CONTINUOUS so the user can choose
+// how aggressively to solidify edges afterward (see the Solidify control).
 function downscaleToAsset(src, pxW, pxH, crossOrigin, keyOut) {
   return new Promise((resolve, reject) => {
     const img = new Image()
@@ -107,8 +137,8 @@ function downscaleToAsset(src, pxW, pxH, crossOrigin, keyOut) {
       const ctx = canvas.getContext('2d')
       try {
         const id = ctx.getImageData(0, 0, pxW, pxH)
-        if (keyOut) chromaKey(id.data, pxW, pxH)
-        cleanAlpha(id.data)
+        if (keyOut) { chromaKey(id.data, pxW, pxH); deFringeMagenta(id.data) }
+        posterize(id.data)
         resolve(new Uint8ClampedArray(id.data))
       } catch {
         reject(new Error('Could not read the image (CORS). Try the gpt-image-1 model.'))
@@ -122,31 +152,29 @@ function downscaleToAsset(src, pxW, pxH, crossOrigin, keyOut) {
 export async function generateAssetWithAI({ prompt, apiKey, model = 'gpt-image-1', pxW, pxH }) {
   if (!apiKey) throw new Error('Missing OpenAI API key.')
   if (!prompt || !prompt.trim()) throw new Error('Enter a prompt describing the prop.')
+  const subject = prompt.trim()
 
-  const res = await fetch(`${API_BASE}/images/generations`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(buildBody(model, STYLE_PREFIX_ASSET + prompt.trim())),
-  })
+  // First try a native transparent background.
+  let res = await requestImage(apiKey, buildBody(model, STYLE_BASE + BG_TRANSPARENT + subject, true))
+  let keyOut = false
 
+  // Some models (e.g. gpt-image-2) don't support transparent background. Fall
+  // back to a solid magenta background and chroma-key it out. A failed 400
+  // request isn't billed, so this retry doesn't add real cost.
   if (!res.ok) {
-    let msg = `OpenAI request failed (HTTP ${res.status}).`
-    try {
-      const err = await res.json()
-      if (err?.error?.message) msg = err.error.message
-    } catch { /* ignore parse error */ }
-    throw new Error(msg)
+    const msg = await readError(res)
+    if (/transparent|background/i.test(msg)) {
+      res = await requestImage(apiKey, buildBody(model, STYLE_BASE + BG_SOLID + subject, false))
+      keyOut = true
+      if (!res.ok) throw new Error(await readError(res))
+    } else {
+      throw new Error(msg)
+    }
   }
 
   const json = await res.json()
   const item = json?.data?.[0]
   if (!item) throw new Error('No image returned by the API.')
-
-  // gpt-image-1 returns alpha already; dall-e returns opaque → chroma-key it.
-  const keyOut = model !== 'gpt-image-1'
 
   if (item.b64_json) {
     return downscaleToAsset(`data:image/png;base64,${item.b64_json}`, pxW, pxH, false, keyOut)

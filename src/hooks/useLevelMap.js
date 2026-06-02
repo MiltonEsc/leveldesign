@@ -7,6 +7,8 @@ export function useLevelMap(initialW = 32, initialH = 20) {
   const [height, setHeight] = useState(initialH)
   const [grid, setGrid]     = useState(() => createGrid(initialW, initialH))
   const [seamlessEdges, setSeamlessEdges] = useState(false)
+  // Props placed on the level: { id, assetId, x, y } (x,y = anchor cell, top-left)
+  const [placedProps, setPlacedProps] = useState([])
   const paintValue = useRef(1)
 
   const paintCell = useCallback((x, y, value) => {
@@ -39,6 +41,26 @@ export function useLevelMap(initialW = 32, initialH = 20) {
     setGrid(createGrid(width, height))
   }, [width, height])
 
+  // ── Placed props ──────────────────────────────────────────────────────────
+  const addProp = useCallback((assetId, x, y) => {
+    const id = (crypto?.randomUUID?.() ?? String(Date.now() + Math.random()))
+    setPlacedProps(prev => [...prev, { id, assetId, x, y }])
+  }, [])
+
+  const removeProp = useCallback((id) => {
+    setPlacedProps(prev => prev.filter(p => p.id !== id))
+  }, [])
+
+  const clearProps = useCallback(() => setPlacedProps([]), [])
+
+  // Replace the whole level (loading a saved one)
+  const loadState = useCallback(({ width: w, height: h, grid: g, placedProps: pp }) => {
+    setWidth(w)
+    setHeight(h)
+    setGrid(g instanceof Uint8Array ? g : new Uint8Array(g))
+    setPlacedProps(Array.isArray(pp) ? pp : [])
+  }, [])
+
   const fillAll = useCallback(() => {
     setGrid(createGrid(width, height, 1))
   }, [width, height])
@@ -63,5 +85,7 @@ export function useLevelMap(initialW = 32, initialH = 20) {
   return {
     width, height, grid, seamlessEdges, setSeamlessEdges,
     startPaint, continuePaint, generate, clear, fillAll, resize,
+    placedProps, addProp, removeProp, clearProps,
+    loadState,
   }
 }

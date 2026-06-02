@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef } from 'react'
 import {
   hexToRGBA, rgbaToHex, floodFill,
-  paintBrush, drawLineInto, drawRectInto, getPixelRGBA,
+  paintBrush, drawLineInto, drawRectInto, getPixelRGBA, solidifyAlpha,
 } from '../core/canvasUtils.js'
 
 const MAX_HISTORY = 60
@@ -27,9 +27,13 @@ export function useAssetEditor(initialW, initialH) {
   const strokeStart = useRef(null)
   const baseSnapshot = useRef(null)
   const dims = useRef({ w: initialW, h: initialH })
+  // Last image loaded with CONTINUOUS alpha (e.g. AI result), kept so the
+  // Solidify slider can re-derive from the original instead of a binarized copy.
+  const rawRef = useRef(null)
 
   const resetCanvas = useCallback((w, h) => {
     dims.current = { w, h }
+    rawRef.current = null
     setPixels(makeBlankPixels(w, h))
     setPreview(null); setHistory([]); setHistoryIndex(-1)
   }, [])
@@ -78,6 +82,7 @@ export function useAssetEditor(initialW, initialH) {
     }
 
     isDrawing.current = true
+    rawRef.current = null // manual edit → slider should act on current pixels
     pushHistory(pixels)
 
     if (SHAPE_TOOLS.has(tool)) {
@@ -117,16 +122,35 @@ export function useAssetEditor(initialW, initialH) {
     }
   }, [tool, preview])
 
-  // Replace the canvas content (e.g. from an AI-generated prop)
+  // Replace the canvas content (e.g. from an AI-generated prop). The data is
+  // remembered as the "raw" source so the Solidify slider can re-derive from it.
   const loadPixels = useCallback((data, w, h) => {
     if (w && h) dims.current = { w, h }
+    rawRef.current = new Uint8ClampedArray(data)
     pushHistory(pixels)
     setPixels(new Uint8ClampedArray(data))
     setPreview(null)
   }, [pixels, pushHistory])
 
+  // Binarize alpha at `threshold`, re-deriving from the raw (continuous-alpha)
+  // source when available so the slider can be dragged both ways. With
+  // commit=false it only previews; commit=true writes it and records history.
+  const applySolidify = useCallback((threshold, commit) => {
+    const base = rawRef.current || pixels
+    const out = new Uint8ClampedArray(base)
+    solidifyAlpha(out, threshold)
+    if (commit) {
+      pushHistory(pixels)
+      setPixels(out)
+      setPreview(null)
+    } else {
+      setPreview(out)
+    }
+  }, [pixels, pushHistory])
+
   const clear = useCallback(() => {
     const { w, h } = dims.current
+    rawRef.current = null
     pushHistory(pixels)
     setPixels(makeBlankPixels(w, h))
     setPreview(null)
@@ -142,7 +166,7 @@ export function useAssetEditor(initialW, initialH) {
     activeColor, setActiveColor,
     startStroke, continueStroke, endStroke,
     undo, redo,
-    resetCanvas, loadPixels, clear, getPixels,
+    resetCanvas, loadPixels, clear, getPixels, applySolidify,
     canUndo: historyIndex > 0,
     canRedo: historyIndex < history.length - 1,
   }

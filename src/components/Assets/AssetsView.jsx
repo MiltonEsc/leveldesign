@@ -8,9 +8,10 @@ import { AssetGallery }  from './AssetGallery.jsx'
 import { useAssetEditor } from '../../hooks/useAssetEditor.js'
 import { exportAsset, exportAllAssets } from '../../core/exportAsset.js'
 
-// Fits the prop into roughly a 340px square edit area.
+// Fits the prop into roughly a 340px square edit area (min 1 so large props
+// like 64px×4 cells don't overflow the editor).
 function fitZoom(pxW, pxH) {
-  return Math.max(4, Math.min(28, Math.floor(340 / Math.max(pxW, pxH))))
+  return Math.max(1, Math.min(28, Math.floor(340 / Math.max(pxW, pxH))))
 }
 
 export function AssetsView({ tileSize, gallery }) {
@@ -18,6 +19,7 @@ export function AssetsView({ tileSize, gallery }) {
   const [rows, setRows] = useState(2)
   const [workTileSize, setWorkTileSize] = useState(tileSize)
   const [name, setName] = useState('prop')
+  const [solidThreshold, setSolidThreshold] = useState(128)
 
   const pxW = cols * workTileSize
   const pxH = rows * workTileSize
@@ -36,7 +38,20 @@ export function AssetsView({ tileSize, gallery }) {
 
   const handleGenerated = useCallback((pixels) => {
     editor.loadPixels(pixels, pxW, pxH)
-  }, [editor, pxW, pxH])
+    // Apply the current solidity so the AI result is clean by default; the
+    // slider can still re-derive softer/harder edges from the raw alpha.
+    editor.applySolidify(solidThreshold, true)
+  }, [editor, pxW, pxH, solidThreshold])
+
+  // Live preview while dragging; commit (records history) on release/button.
+  const handleSolidPreview = useCallback((v) => {
+    setSolidThreshold(v)
+    editor.applySolidify(v, false)
+  }, [editor])
+
+  const handleSolidCommit = useCallback(() => {
+    editor.applySolidify(solidThreshold, true)
+  }, [editor, solidThreshold])
 
   const handleSave = useCallback(() => {
     gallery.add({ name, cols, rows, tileSize: workTileSize, pixels: editor.getPixels() })
@@ -75,6 +90,22 @@ export function AssetsView({ tileSize, gallery }) {
             onContinueStroke={editor.continueStroke}
             onEndStroke={editor.endStroke}
           />
+          <div className="asset-postprocess">
+            <div className="asset-pp-label">🪄 Edge solidity</div>
+            <div className="asset-pp-row">
+              <input
+                type="range" min="1" max="255" value={solidThreshold}
+                onChange={e => handleSolidPreview(+e.target.value)}
+                onPointerUp={handleSolidCommit}
+                onKeyUp={handleSolidCommit}
+                title="Translucent pixels ≥ threshold become solid, below become transparent"
+              />
+              <span className="asset-pp-value">{solidThreshold}</span>
+              <button className="asset-pp-btn" onClick={handleSolidCommit} title="Remove translucent pixels">Solidify</button>
+            </div>
+            <div className="asset-pp-hint">Removes translucent edge pixels: ≥ threshold → solid, below → erased.</div>
+          </div>
+
           <div className="asset-edit-actions">
             <input
               className="asset-name-input"

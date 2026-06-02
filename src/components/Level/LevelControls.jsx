@@ -12,9 +12,28 @@ export function LevelControls({
   width, height, cellPx, setCellPx,
   showGrid, setShowGrid, seamlessEdges, setSeamlessEdges,
   onGenerate, onClear, onFill, onResize, onRandomizeAll, onFit,
+  levelTool, setLevelTool,
 }) {
   return (
     <div className="level-controls">
+      <div className="level-section">
+        <div className="level-section-label">🛠️ Tool</div>
+        <div className="level-tool-toggle">
+          <button
+            className={`level-tool-btn ${levelTool === 'terrain' ? 'active' : ''}`}
+            onClick={() => setLevelTool('terrain')}
+          >
+            🧱 Terrain
+          </button>
+          <button
+            className={`level-tool-btn ${levelTool === 'props' ? 'active' : ''}`}
+            onClick={() => setLevelTool('props')}
+          >
+            🧩 Props
+          </button>
+        </div>
+      </div>
+
       <div className="level-section">
         <div className="level-section-label">⚡ Auto-Generate Level</div>
         <div className="gen-btn-grid">

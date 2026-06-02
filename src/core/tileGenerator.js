@@ -2,7 +2,6 @@ import { BITS, validMasks, BITMASK_TO_INDEX } from '../constants/bitmaskTable.js
 import { darkenRegion, tintRegion, hexToRGBA, getPixelIdx } from './canvasUtils.js'
 
 const EDGE_WIDTH = 2
-const DARK_THRESH = 80  // per-channel avg below this → tile is dark → lighten borders
 
 // Creates a checkerboard ImageData for the empty tile slot
 function makeEmptyTile(tileSize) {
@@ -23,10 +22,9 @@ function makeEmptyTile(tileSize) {
 }
 
 // Applies border treatment in a single pass — no stacking on corner junctions.
-// Darkens exposed edges on light tiles; lightens them on dark tiles for contrast.
-function applyBorders(data, s, flags, ew, avgBrightness) {
+// Darkens exposed edges so the tile boundary reads against its neighbors.
+function applyBorders(data, s, flags, ew) {
   const { t, b, l, r } = flags
-  const dark = avgBrightness < DARK_THRESH
 
   for (let y = 0; y < s; y++) {
     for (let x = 0; x < s; x++) {
@@ -42,17 +40,9 @@ function applyBorders(data, s, flags, ew, avgBrightness) {
       // Corners (2 zones) get a slightly stronger effect than plain edges (1 zone)
       const factor = zones === 1 ? 0.45 : 0.35
 
-      if (dark) {
-        // Dark tile: lighten borders so they're always visible
-        const lf = 2 - factor  // 1.55 for edges, 1.65 for corners
-        data[i]     = Math.min(255, Math.round(data[i]     * lf))
-        data[i + 1] = Math.min(255, Math.round(data[i + 1] * lf))
-        data[i + 2] = Math.min(255, Math.round(data[i + 2] * lf))
-      } else {
-        data[i]     = Math.round(data[i]     * factor)
-        data[i + 1] = Math.round(data[i + 1] * factor)
-        data[i + 2] = Math.round(data[i + 2] * factor)
-      }
+      data[i]     = Math.round(data[i]     * factor)
+      data[i + 1] = Math.round(data[i + 1] * factor)
+      data[i + 2] = Math.round(data[i + 2] * factor)
     }
   }
 }
@@ -75,16 +65,6 @@ export function generateAllTiles(baseBitmap, tileSize) {
   // Tile 0: empty (checkerboard)
   tiles[0] = makeEmptyTile(tileSize)
 
-  // Compute average per-channel brightness of the base tile once,
-  // so dark vs light tiles get the right border direction for all 47 variants.
-  let lumSum = 0, lumN = 0
-  for (let i = 0; i < baseBitmap.data.length; i += 4) {
-    if (baseBitmap.data[i + 3] === 0) continue
-    lumSum += baseBitmap.data[i] + baseBitmap.data[i + 1] + baseBitmap.data[i + 2]
-    lumN += 3
-  }
-  const avgBrightness = lumN > 0 ? lumSum / lumN : 128
-
   for (const mask of validMasks) {
     const sheetIndex = BITMASK_TO_INDEX.get(mask)
 
@@ -101,9 +81,10 @@ export function generateAllTiles(baseBitmap, tileSize) {
     const data = new Uint8ClampedArray(baseBitmap.data)
     const s = tileSize
 
-    // Single-pass border application — no overlapping darkening on corner pixels
-    const ew = EDGE_WIDTH
-    applyBorders(data, s, { t, b, l, r }, ew, avgBrightness)
+    // Single-pass border application — no overlapping darkening on corner pixels.
+    // Border scales with tile size so it stays visible on large tiles (e.g. 64px).
+    const ew = Math.max(EDGE_WIDTH, Math.round(tileSize / 8))
+    applyBorders(data, s, { t, b, l, r }, ew)
 
     // Inner corner highlights (diagonal missing, both cardinals present)
     if (t && l && !tl) brightenPixel(data, 0,     0,     s, 1.5)

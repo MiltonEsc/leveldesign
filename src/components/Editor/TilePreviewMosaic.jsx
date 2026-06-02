@@ -4,7 +4,8 @@ import { useEffect, useRef } from 'react'
 export function TilePreviewMosaic({ pixels, tileSize }) {
   const canvasRef = useRef(null)
   const REPEAT = 3
-  const SCALE = tileSize === 8 ? 5 : 3
+  // Scale each repeated tile to ~48px so the mosaic stays a sane size at any tile size
+  const SCALE = Math.max(1, Math.round(48 / tileSize))
   const cell = tileSize * SCALE
 
   useEffect(() => {
