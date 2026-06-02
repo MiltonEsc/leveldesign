@@ -5,7 +5,7 @@ export function GenerateButton({ mode, onGenerate, disabled }) {
       onClick={onGenerate}
       disabled={disabled}
     >
-      {mode === 'draw' ? '⚡ Generate Tileset' : '🎲 Generate Procedural'}
+      {mode === 'draw' ? 'Generate tileset' : 'Generate procedural'}
     </button>
   )
 }

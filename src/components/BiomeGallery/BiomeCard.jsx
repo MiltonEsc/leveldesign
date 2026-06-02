@@ -17,9 +17,7 @@ export function BiomeCard({ biome, tileSize, isActive, onClick }) {
       title={`Switch to ${biome.label} biome`}
     >
       <BiomeCardPreview tiles={tiles} tileSize={tileSize} />
-      <span className="biome-card-label">
-        {biome.emoji} {biome.label}
-      </span>
+      <span className="biome-card-label">{biome.label}</span>
       {isActive && <span className="biome-card-active-badge">●</span>}
     </button>
   )

@@ -17,50 +17,48 @@ export function LevelControls({
   return (
     <div className="level-controls">
       <div className="level-section">
-        <div className="level-section-label">🛠️ Tool</div>
+        <div className="level-section-label">Tool</div>
         <div className="level-tool-toggle">
           <button
             className={`level-tool-btn ${levelTool === 'terrain' ? 'active' : ''}`}
             onClick={() => setLevelTool('terrain')}
           >
-            🧱 Terrain
+            Terrain
           </button>
           <button
             className={`level-tool-btn ${levelTool === 'props' ? 'active' : ''}`}
             onClick={() => setLevelTool('props')}
           >
-            🧩 Props
+            Props
           </button>
         </div>
       </div>
 
       <div className="level-section">
-        <div className="level-section-label">⚡ Auto-Generate Level</div>
+        <div className="level-section-label">Auto-generate</div>
         <div className="gen-btn-grid">
           {Object.entries(GENERATORS).map(([key, g]) => (
             <button key={key} className="gen-btn" onClick={() => onGenerate(key)} title={`Generate ${g.label}`}>
-              <span className="gen-btn-emoji">{g.emoji}</span>
-              <span>{g.label}</span>
+              {g.label}
             </button>
           ))}
           <button className="gen-btn gen-btn-surprise" onClick={onRandomizeAll} title="Random generator + random seed">
-            <span className="gen-btn-emoji">✨</span>
-            <span>Surprise</span>
+            Surprise
           </button>
         </div>
       </div>
 
       <div className="level-section">
-        <div className="level-section-label">🖌️ Edit</div>
+        <div className="level-section-label">Edit</div>
         <div className="level-edit-row">
-          <button className="level-mini-btn" onClick={onClear} title="Clear the map">🧹 Clear</button>
-          <button className="level-mini-btn" onClick={onFill} title="Fill the whole map">⬛ Fill</button>
+          <button className="level-mini-btn" onClick={onClear} title="Clear the map">Clear</button>
+          <button className="level-mini-btn" onClick={onFill} title="Fill the whole map">Fill</button>
         </div>
-        <div className="level-hint">Left-click paints · Right-click erases</div>
+        <div className="level-hint">Left-click paints · right-click erases</div>
       </div>
 
       <div className="level-section">
-        <div className="level-section-label">📐 Map Size</div>
+        <div className="level-section-label">Map size</div>
         <div className="size-preset-row">
           {SIZE_PRESETS.map(p => (
             <button
@@ -76,12 +74,12 @@ export function LevelControls({
       </div>
 
       <div className="level-section">
-        <div className="level-section-label">🔍 Zoom</div>
+        <div className="level-section-label">Zoom</div>
         <div className="zoom-control">
           <button className="zoom-btn" onClick={() => setCellPx(p => p - ZOOM_STEP)} disabled={cellPx <= MIN_CELL_PX}>−</button>
           <span className="zoom-label">{cellPx}px</span>
           <button className="zoom-btn" onClick={() => setCellPx(p => p + ZOOM_STEP)} disabled={cellPx >= MAX_CELL_PX}>+</button>
-          <button className="zoom-fit-btn" onClick={onFit} title="Fit map to screen">⊡ Fit</button>
+          <button className="zoom-fit-btn" onClick={onFit} title="Fit map to screen">Fit</button>
         </div>
         <div className="level-hint">Scroll wheel over the canvas to zoom</div>
       </div>

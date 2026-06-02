@@ -14,7 +14,7 @@ export function ExportButton({ tiles, tileSize, biomeName }) {
       disabled={!tiles}
       title="Download tileset as PNG (8×6 grid)"
     >
-      ⬇️ Export PNG
+      Export PNG
     </button>
   )
 }

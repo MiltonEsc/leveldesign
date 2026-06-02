@@ -96,6 +96,29 @@ body {
 .mode-btn:hover  { border-color: var(--accent); color: var(--text); }
 .mode-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
 
+/* ─── Kind Toggle (Tileset / Prop) ──────────────────────────────────────── */
+.kind-toggle {
+  display: flex;
+  gap: 2px;
+  background: var(--bg-card);
+  padding: 3px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+.kind-btn {
+  padding: 4px 12px;
+  border-radius: var(--radius);
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.kind-btn:hover  { color: var(--text); }
+.kind-btn.active { background: var(--accent2); color: #fff; }
+
 /* ─── View Tabs ─────────────────────────────────────────────────────────── */
 .view-tabs {
   display: flex;
@@ -137,7 +160,19 @@ body {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
+  min-height: 0;
+}
+.sidebar::-webkit-scrollbar       { width: 6px; }
+.sidebar::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 3px; }
+
+/* ─── Section label (shared) ────────────────────────────────────────────── */
+.panel-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-weight: 600;
 }
 
 /* ─── Toolbar ───────────────────────────────────────────────────────────── */
@@ -146,28 +181,39 @@ body {
   flex-direction: column;
   gap: 6px;
 }
-.toolbar-group {
-  display: flex;
+.tool-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 4px;
-  flex-wrap: wrap;
 }
 .tool-btn {
-  width: 36px;
-  height: 36px;
+  padding: 6px 4px;
   border-radius: var(--radius);
   border: 1px solid var(--border-light);
   background: var(--bg-card);
   color: var(--text);
-  font-size: 16px;
+  font-size: 12px;
   cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   transition: all 0.15s;
 }
 .tool-btn:hover    { border-color: var(--accent2); background: var(--bg-elevated); }
-.tool-btn.active   { border-color: var(--accent2); background: var(--accent2); }
+.tool-btn.active   { border-color: var(--accent2); background: var(--accent2); color: #fff; }
 .tool-btn:disabled { opacity: 0.3; cursor: default; }
+
+.undo-row { display: flex; gap: 4px; }
+.undo-btn {
+  flex: 1;
+  padding: 5px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-light);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.undo-btn:hover:not(:disabled) { border-color: var(--accent2); color: var(--text); }
+.undo-btn:disabled { opacity: 0.3; cursor: default; }
 
 /* ─── Brush size ────────────────────────────────────────────────────────── */
 .brush-row {
@@ -257,18 +303,11 @@ body {
 .ai-panel {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px;
+  gap: 5px;
+  padding: 8px;
   border-radius: var(--radius);
   border: 1px solid var(--border-light);
-  background: linear-gradient(160deg, rgba(15,155,142,0.08), rgba(233,69,96,0.06));
-}
-.ai-panel-label {
-  font-size: 11px;
-  color: var(--text);
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  font-weight: 700;
+  background: rgba(15,155,142,0.06);
 }
 .ai-prompt {
   width: 100%;

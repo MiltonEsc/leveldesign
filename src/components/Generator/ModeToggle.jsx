@@ -5,13 +5,13 @@ export function ModeToggle({ mode, setMode }) {
         className={`mode-btn ${mode === 'draw' ? 'active' : ''}`}
         onClick={() => setMode('draw')}
       >
-        ✏️ Draw
+        Draw
       </button>
       <button
         className={`mode-btn ${mode === 'procedural' ? 'active' : ''}`}
         onClick={() => setMode('procedural')}
       >
-        ⚙️ Procedural
+        Procedural
       </button>
     </div>
   )

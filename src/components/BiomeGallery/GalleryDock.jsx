@@ -42,10 +42,10 @@ export function GalleryDock({
       <div className="gallery-dock-head">
         <div className="gallery-tabs">
           <button className={`gallery-tab ${tab === 'tilesets' ? 'active' : ''}`} onClick={() => setTab('tilesets')}>
-            🗺️ Tilesets
+            Tilesets
           </button>
           <button className={`gallery-tab ${tab === 'props' ? 'active' : ''}`} onClick={() => setTab('props')}>
-            🧩 Props ({assets.length})
+            Props ({assets.length})
           </button>
         </div>
 
@@ -57,7 +57,7 @@ export function GalleryDock({
               onChange={e => setName(e.target.value)}
               placeholder={defaultName}
             />
-            <button className="gallery-save-btn" onClick={handleSave} title="Save current tileset to the gallery">💾 Save</button>
+            <button className="gallery-save-btn" onClick={handleSave} title="Save current tileset to the gallery">Save</button>
           </div>
         )}
       </div>

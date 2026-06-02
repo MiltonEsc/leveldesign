@@ -4,11 +4,14 @@ Guidance for Claude Code when working in this repository.
 
 ## Project
 
-**Tileset Studio** — a React + Vite web app to author 47+1 autotile tilesets (pixel art, 8×8 / 16×16 / 64×64) and design/test levels with them. Three main views:
+**Tileset Studio** — a React + Vite web app to author 47+1 autotile tilesets (pixel art, 8×8 / 16×16 / 64×64) and design/test levels with them. **Two top-level views** (header tabs `Editor` / `Levels`, `activeView`):
 
-- **Tileset** — create the 48-tile sheet three ways: draw a base tile, generate procedurally from a biome palette, or generate a base tile with the OpenAI Images API. Preview all 48 tiles and export an 8×6 PNG.
-- **Level Designer** — paint or procedurally generate a level grid that is **autotiled live** with the active tileset. This is the "test bench" for a tileset. Supports mouse-wheel zoom (cursor-centered), a collapsible side panel, and a "Fit" button. A **Terrain/Props tool toggle** switches between painting terrain and **placing saved props** on top (select a prop in the PropPicker, left-click to place, right-click to remove; a ghost previews placement under the cursor).
-- **Assets** — author **scenery props** (trees, houses, barrels…) that are multi-cell (1×1 to 4×4) with a **transparent background**. Generate with the OpenAI Images API and/or draw/retouch by hand, save to a persisted gallery, and export each prop (or an atlas) as a transparent PNG. Saved props are placeable in the Level Designer (Props tool).
+- **Editor** — has a **Tileset / Prop** sub-toggle (`editorKind`):
+  - *Tileset*: create the 48-tile sheet three ways — draw a base tile, generate procedurally from a biome palette, or generate a base tile with the OpenAI Images API. Preview all 48 tiles and export an 8×6 PNG.
+  - *Prop*: author **scenery props** (trees, houses, barrels…), multi-cell (1×1 to 4×4) with a **transparent background**. Generate with the OpenAI Images API and/or draw by hand, save to a gallery, export each prop or an atlas PNG. (Rendered by `AssetsView`.)
+- **Levels** — paint or procedurally generate a level grid that is **autotiled live** with the active tileset (the "test bench"). Mouse-wheel zoom (cursor-centered), collapsible side panel, "Fit" button. A **Terrain/Props tool toggle** switches between painting terrain and **placing saved props** on top (select a prop in the PropPicker, left-click to place, right-click to remove; a ghost previews placement).
+
+**UI convention: no emojis** — labels/buttons use plain text. Don't add emoji to the interface.
 
 ## Commands
 
@@ -33,7 +36,7 @@ Everything keys off an **8-bit neighbor bitmask** with a diagonal-pruning rule: 
 
 ## Architecture
 
-State lives in per-area hooks; `App.jsx` holds only the cross-cutting UI state (`activeView` = `'tileset' | 'level' | 'assets'`, `tileSize`, `mode`, `localBiome`, `levelTool`, level zoom/sidebar state) and wires panels together. No Context, no external state lib — the tree is shallow, props are passed directly. The `assets`/`tilesets`/`levels` gallery hooks are instantiated in `App.jsx` and shared across views — e.g. `assets` feeds both the Assets editor and the Level Designer's prop placement. Loading a saved tileset/level routes through `App.jsx#applyTilesetDefinition`, which regenerates the 48 tiles.
+State lives in per-area hooks; `App.jsx` holds only the cross-cutting UI state (`activeView` = `'editor' | 'level'`, `editorKind` = `'tileset' | 'prop'`, `tileSize`, `mode`, `localBiome`, `levelTool`, level zoom/sidebar state) and wires panels together. No Context, no external state lib — the tree is shallow, props are passed directly. The `assets`/`tilesets`/`levels` gallery hooks are instantiated in `App.jsx` and shared across views — e.g. `assets` feeds both the Assets editor and the Level Designer's prop placement. Loading a saved tileset/level routes through `App.jsx#applyTilesetDefinition`, which regenerates the 48 tiles.
 
 **Core (pure logic, no React):** [src/core/](src/core/)
 - `tileGenerator.js` — draw mode: clones the base `ImageData` and applies borders per bitmask → `ImageData[48]`. Borders are applied in a **single pass** (`applyBorders`) so corner pixels aren't darkened multiple times; exposed edges are always **darkened** (corners a bit more than straight edges).

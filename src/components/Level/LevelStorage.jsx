@@ -11,7 +11,7 @@ export function LevelStorage({ levels, onSave, onLoad, onRemove }) {
 
   return (
     <div className="level-section level-storage">
-      <div className="level-section-label">💾 Saved Levels ({levels.length})</div>
+      <div className="level-section-label">Saved levels ({levels.length})</div>
       <div className="level-save-row">
         <input
           className="level-name-input"
@@ -28,7 +28,7 @@ export function LevelStorage({ levels, onSave, onLoad, onRemove }) {
               <button className="level-list-load" onClick={() => onLoad(l)} title={`Load ${l.name} (${l.width}×${l.height})`}>
                 {l.name} <span className="level-list-dim">{l.width}×{l.height}</span>
               </button>
-              <button className="level-list-del" onClick={() => onRemove(l.id)} title="Delete">🗑</button>
+              <button className="level-list-del" onClick={() => onRemove(l.id)} title="Delete">×</button>
             </div>
           ))}
         </div>

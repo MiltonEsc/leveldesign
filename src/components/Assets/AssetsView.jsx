@@ -91,7 +91,7 @@ export function AssetsView({ tileSize, gallery }) {
             onEndStroke={editor.endStroke}
           />
           <div className="asset-postprocess">
-            <div className="asset-pp-label">🪄 Edge solidity</div>
+            <div className="asset-pp-label">Edge solidity</div>
             <div className="asset-pp-row">
               <input
                 type="range" min="1" max="255" value={solidThreshold}
@@ -113,8 +113,8 @@ export function AssetsView({ tileSize, gallery }) {
               onChange={e => setName(e.target.value)}
               placeholder="Prop name"
             />
-            <button className="asset-clear-btn" onClick={editor.clear} title="Clear canvas">🧹 Clear</button>
-            <button className="asset-save-btn" onClick={handleSave} title="Save to gallery">💾 Save to gallery</button>
+            <button className="asset-clear-btn" onClick={editor.clear} title="Clear canvas">Clear</button>
+            <button className="asset-save-btn" onClick={handleSave} title="Save to gallery">Save to gallery</button>
           </div>
         </div>
       </section>

@@ -46,7 +46,7 @@ export function AssetGallery({
           disabled={!assets.length}
           title="Export all props as one atlas PNG"
         >
-          ⬇ Atlas
+          Atlas PNG
         </button>
       </div>
 
@@ -64,9 +64,9 @@ export function AssetGallery({
               <AssetThumb asset={a} />
               <div className="asset-card-name">{a.name}</div>
               <div className="asset-card-actions">
-                <button className="asset-card-btn" onClick={(e) => { e.stopPropagation(); onLoadToEditor(a) }} title="Edit in canvas">✏️</button>
-                <button className="asset-card-btn" onClick={(e) => { e.stopPropagation(); onExport(a) }} title="Export PNG">⬇</button>
-                <button className="asset-card-btn danger" onClick={(e) => { e.stopPropagation(); onRemove(a.id) }} title="Delete">🗑</button>
+                <button className="asset-card-btn" onClick={(e) => { e.stopPropagation(); onLoadToEditor(a) }} title="Edit in canvas">Edit</button>
+                <button className="asset-card-btn" onClick={(e) => { e.stopPropagation(); onExport(a) }} title="Export PNG">PNG</button>
+                <button className="asset-card-btn danger" onClick={(e) => { e.stopPropagation(); onRemove(a.id) }} title="Delete">×</button>
               </div>
             </div>
           ))}

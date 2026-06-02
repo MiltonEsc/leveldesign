@@ -16,7 +16,6 @@ export function AssetAIPanel({ pxW, pxH, onGenerated }) {
   const [model, setModel]     = useState(() => localStorage.getItem(LS_MODEL) || 'gpt-image-1')
   const [loading, setLoading] = useState(false)
   const [error, setError]     = useState('')
-  const [showKey, setShowKey] = useState(false)
 
   const handleKeyChange = (v) => { setApiKey(v); localStorage.setItem(LS_KEY, v) }
   const handleModelChange = (v) => { setModel(v); localStorage.setItem(LS_MODEL, v) }
@@ -36,14 +35,14 @@ export function AssetAIPanel({ pxW, pxH, onGenerated }) {
 
   return (
     <div className="ai-panel">
-      <div className="ai-panel-label">🤖 AI Prop</div>
+      <div className="panel-label">AI prop</div>
 
       <textarea
         className="ai-prompt"
         placeholder="e.g. oak tree, wooden barrel, stone tower, bush…"
         value={prompt}
         onChange={e => setPrompt(e.target.value)}
-        rows={3}
+        rows={2}
         disabled={loading}
       />
 
@@ -51,28 +50,20 @@ export function AssetAIPanel({ pxW, pxH, onGenerated }) {
         {AI_MODELS.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
       </select>
 
-      <div className="ai-key-row">
-        <input
-          className="ai-key"
-          type={showKey ? 'text' : 'password'}
-          placeholder="OpenAI API key (sk-…)"
-          value={apiKey}
-          onChange={e => handleKeyChange(e.target.value)}
-          disabled={loading}
-        />
-        <button className="ai-key-toggle" onClick={() => setShowKey(s => !s)} title="Show/hide key" type="button">
-          {showKey ? '🙈' : '👁️'}
-        </button>
-      </div>
+      <input
+        className="ai-key"
+        type="password"
+        placeholder="OpenAI API key (sk-…)"
+        value={apiKey}
+        onChange={e => handleKeyChange(e.target.value)}
+        disabled={loading}
+      />
 
       <button className="ai-generate-btn" onClick={handleGenerate} disabled={loading || !prompt.trim() || !apiKey}>
-        {loading ? '⏳ Generating…' : '✨ Generate Prop'}
+        {loading ? 'Generating…' : 'Generate prop'}
       </button>
 
       {error && <div className="ai-error">{error}</div>}
-      <div className="ai-hint">
-        Generated with a transparent background and downscaled to {pxW}×{pxH}px. Then edit and save to the gallery.
-      </div>
     </div>
   )
 }

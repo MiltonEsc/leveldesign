@@ -37,14 +37,14 @@ export function PropPicker({ assets, selectedId, onSelect, placedCount, onClearP
   return (
     <div className="prop-picker">
       <div className="prop-picker-head">
-        <span className="level-section-label">🧩 Props ({placedCount} placed)</span>
+        <span className="level-section-label">Props ({placedCount} placed)</span>
         <button
           className="level-mini-btn"
           onClick={onClearProps}
           disabled={!placedCount}
           title="Remove all placed props"
         >
-          🧹 Clear
+          Clear
         </button>
       </div>
 

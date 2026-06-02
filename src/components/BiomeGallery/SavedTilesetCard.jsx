@@ -33,12 +33,12 @@ export function SavedTilesetCard({ tileset, onLoad, onRemove }) {
       title={`Load "${tileset.name}" · ${size}px · ${tileset.definition?.mode}`}
     >
       <BiomeCardPreview tiles={tiles} tileSize={size} />
-      <span className="biome-card-label">💾 {tileset.name}</span>
+      <span className="biome-card-label">{tileset.name}</span>
       <span
         className="saved-tileset-del"
         onClick={(e) => { e.stopPropagation(); onRemove(tileset.id) }}
         title="Delete tileset"
-      >🗑</span>
+      >×</span>
     </button>
   )
 }

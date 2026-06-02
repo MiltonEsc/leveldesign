@@ -1,11 +1,11 @@
 const TOOLS = [
-  { id: 'pencil',     label: '✏️', title: 'Pencil' },
-  { id: 'eraser',     label: '⬜', title: 'Eraser' },
-  { id: 'fill',       label: '🪣', title: 'Fill (flood)' },
-  { id: 'line',       label: '📏', title: 'Line' },
-  { id: 'rect',       label: '▭',  title: 'Rectangle (outline)' },
-  { id: 'rectFill',   label: '▬',  title: 'Rectangle (filled)' },
-  { id: 'eyedropper', label: '💧', title: 'Eyedropper (pick color)' },
+  { id: 'pencil',     label: 'Pen' },
+  { id: 'eraser',     label: 'Erase' },
+  { id: 'fill',       label: 'Fill' },
+  { id: 'line',       label: 'Line' },
+  { id: 'rect',       label: 'Rect' },
+  { id: 'rectFill',   label: 'Rect fill' },
+  { id: 'eyedropper', label: 'Pick' },
 ]
 
 const BRUSH_SIZES = [1, 2, 3, 4]
@@ -13,12 +13,12 @@ const BRUSH_SIZES = [1, 2, 3, 4]
 export function ToolBar({ tool, setTool, brush, setBrush, onUndo, onRedo, canUndo, canRedo }) {
   return (
     <div className="toolbar">
-      <div className="toolbar-group">
+      <div className="panel-label">Tools</div>
+      <div className="tool-grid">
         {TOOLS.map(t => (
           <button
             key={t.id}
             className={`tool-btn ${tool === t.id ? 'active' : ''}`}
-            title={t.title}
             onClick={() => setTool(t.id)}
           >
             {t.label}
@@ -40,9 +40,9 @@ export function ToolBar({ tool, setTool, brush, setBrush, onUndo, onRedo, canUnd
         ))}
       </div>
 
-      <div className="toolbar-group">
-        <button className="tool-btn" title="Undo (Ctrl+Z)" onClick={onUndo} disabled={!canUndo}>↩</button>
-        <button className="tool-btn" title="Redo (Ctrl+Y)" onClick={onRedo} disabled={!canRedo}>↪</button>
+      <div className="undo-row">
+        <button className="undo-btn" onClick={onUndo} disabled={!canUndo}>Undo</button>
+        <button className="undo-btn" onClick={onRedo} disabled={!canRedo}>Redo</button>
       </div>
     </div>
   )

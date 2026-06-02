@@ -28,7 +28,8 @@ import { clampCellPx } from './components/Level/zoomConfig.js'
 import { bytesToBase64, base64ToBytes } from './lib/serialize.js'
 
 export default function App() {
-  const [activeView, setActiveView] = useState('tileset') // 'tileset' | 'level'
+  const [activeView, setActiveView] = useState('editor') // 'editor' | 'level'
+  const [editorKind, setEditorKind] = useState('tileset') // 'tileset' | 'prop'
   const [tileSize, setTileSize]     = useState(16)
   const [mode, setMode]             = useState('procedural')
 
@@ -97,16 +98,16 @@ export default function App() {
     tilesheet.generateFromBiome(localBiome, newSize)
   }
 
-  // Keyboard shortcuts (draw view only)
+  // Keyboard shortcuts (tileset draw mode only)
   useEffect(() => {
     const handleKey = (e) => {
-      if (activeView !== 'tileset' || mode !== 'draw') return
+      if (activeView !== 'editor' || editorKind !== 'tileset' || mode !== 'draw') return
       if (e.ctrlKey && e.key === 'z') { e.preventDefault(); drawing.undo() }
       if (e.ctrlKey && e.key === 'y') { e.preventDefault(); drawing.redo() }
     }
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
-  }, [drawing, activeView, mode])
+  }, [drawing, activeView, editorKind, mode])
 
   const handleGenerate = () => {
     if (mode === 'draw') {
@@ -218,35 +219,37 @@ export default function App() {
     <div className="app">
       {/* Header */}
       <header className="app-header">
-        <h1 className="app-title">🎮 Tileset Studio</h1>
+        <h1 className="app-title">Tileset Studio</h1>
 
         <div className="view-tabs">
-          <button className={`view-tab ${activeView === 'tileset' ? 'active' : ''}`} onClick={() => setActiveView('tileset')}>
-            🎨 Tileset
+          <button className={`view-tab ${activeView === 'editor' ? 'active' : ''}`} onClick={() => setActiveView('editor')}>
+            Editor
           </button>
           <button className={`view-tab ${activeView === 'level' ? 'active' : ''}`} onClick={() => setActiveView('level')}>
-            🗺️ Level Designer
-          </button>
-          <button className={`view-tab ${activeView === 'assets' ? 'active' : ''}`} onClick={() => setActiveView('assets')}>
-            🧩 Assets
+            Levels
           </button>
         </div>
 
         <div className="header-controls">
-          <span className="tile-size-label">Tile size:</span>
-          <div className="tile-size-toggle">
+          {activeView === 'editor' && (
+            <div className="kind-toggle">
+              <button className={`kind-btn ${editorKind === 'tileset' ? 'active' : ''}`} onClick={() => setEditorKind('tileset')}>Tileset</button>
+              <button className={`kind-btn ${editorKind === 'prop' ? 'active' : ''}`} onClick={() => setEditorKind('prop')}>Prop</button>
+            </div>
+          )}
+          <div className="tile-size-toggle" title="Tile size">
             {[8, 16, 64].map(s => (
               <button key={s} className={`tile-size-btn ${tileSize === s ? 'active' : ''}`} onClick={() => handleTileSizeChange(s)}>
-                {s}×{s}
+                {s}
               </button>
             ))}
           </div>
-          {activeView === 'tileset' && <ModeToggle mode={mode} setMode={setMode} />}
+          {activeView === 'editor' && editorKind === 'tileset' && <ModeToggle mode={mode} setMode={setMode} />}
         </div>
       </header>
 
-      {/* ─── TILESET VIEW ─────────────────────────────────────────────── */}
-      {activeView === 'tileset' && (
+      {/* ─── EDITOR VIEW (Tileset + Prop) ─────────────────────────────── */}
+      {activeView === 'editor' && editorKind === 'tileset' && (
         <>
           <main className="app-main">
             <aside className="sidebar">
@@ -274,7 +277,7 @@ export default function App() {
               {mode === 'draw' ? (
                 <div className="draw-layout">
                   <div className="canvas-container">
-                    <div className="canvas-label">Base Tile ({tileSize}×{tileSize})</div>
+                    <div className="canvas-label">Base tile ({tileSize}×{tileSize})</div>
                     <PixelCanvas
                       pixels={drawing.pixels}
                       tileSize={tileSize}
@@ -289,10 +292,10 @@ export default function App() {
                 </div>
               ) : (
                 <div className="proc-info">
-                  <div className="proc-info-title">⚙️ Procedural Mode</div>
+                  <div className="proc-info-title">Procedural mode</div>
                   <p>All 48 tiles are generated automatically from the biome palette.</p>
                   <p>Tune colors on the left, then Generate.</p>
-                  <div className="proc-biome-badge">{localBiome.emoji} {localBiome.label}</div>
+                  <div className="proc-biome-badge">{localBiome.label}</div>
                 </div>
               )}
               <GenerateButton mode={mode} onGenerate={handleGenerate} disabled={false} />
@@ -304,6 +307,15 @@ export default function App() {
             </aside>
           </main>
 
+          <footer className="app-footer">
+            {galleryDock}
+          </footer>
+        </>
+      )}
+
+      {activeView === 'editor' && editorKind === 'prop' && (
+        <>
+          <AssetsView tileSize={tileSize} gallery={assets} />
           <footer className="app-footer">
             {galleryDock}
           </footer>
@@ -373,7 +385,7 @@ export default function App() {
                   onRemovePropAt={handleRemovePropAt}
                 />
               ) : (
-                <div className="level-empty">Generate a tileset first in the Tileset view.</div>
+                <div className="level-empty">Generate a tileset first in the Editor view.</div>
               )}
             </section>
           </main>
@@ -382,11 +394,6 @@ export default function App() {
             {galleryDock}
           </footer>
         </>
-      )}
-
-      {/* ─── ASSETS VIEW ──────────────────────────────────────────────── */}
-      {activeView === 'assets' && (
-        <AssetsView tileSize={tileSize} gallery={assets} />
       )}
     </div>
   )
