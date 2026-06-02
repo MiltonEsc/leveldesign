@@ -8,6 +8,7 @@ import { ModeToggle }         from './components/Generator/ModeToggle.jsx'
 import { ProceduralControls } from './components/Generator/ProceduralControls.jsx'
 import { GenerateButton }     from './components/Generator/GenerateButton.jsx'
 import { AITilePanel }        from './components/Generator/AITilePanel.jsx'
+import { AIProceduralPanel }  from './components/Generator/AIProceduralPanel.jsx'
 import { TileSheetPreview }   from './components/TileSheet/TileSheetPreview.jsx'
 import { ExportButton }       from './components/TileSheet/ExportButton.jsx'
 import { GalleryDock }        from './components/BiomeGallery/GalleryDock.jsx'
@@ -126,6 +127,13 @@ export default function App() {
   const handleColorChange = (key, value) => {
     setLocalBiome(prev => ({ ...prev, colors: { ...prev.colors, [key]: value } }))
   }
+
+  // AI procedural: compose 48 autotiles from an AI center texture + optional edge
+  const handleAIProcedural = useCallback((centerPixels, edgePixels) => {
+    const centerData = new ImageData(new Uint8ClampedArray(centerPixels), tileSize, tileSize)
+    const edgeData = edgePixels ? new ImageData(new Uint8ClampedArray(edgePixels), tileSize, tileSize) : null
+    tilesheet.generateFromTextures(centerData, edgeData, tileSize, localBiome.colors)
+  }, [tileSize, tilesheet, localBiome])
 
   // Builds the definition that regenerates the current tileset's 48 tiles.
   const currentTilesetDefinition = useCallback(() => (
@@ -269,7 +277,10 @@ export default function App() {
                 <AITilePanel tileSize={tileSize} onGenerated={drawing.loadPixels} />
               )}
               {mode === 'procedural' && (
-                <ProceduralControls biome={localBiome} onColorChange={handleColorChange} />
+                <>
+                  <ProceduralControls biome={localBiome} onColorChange={handleColorChange} />
+                  <AIProceduralPanel tileSize={tileSize} onGenerated={handleAIProcedural} />
+                </>
               )}
             </aside>
 

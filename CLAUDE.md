@@ -40,7 +40,7 @@ State lives in per-area hooks; `App.jsx` holds only the cross-cutting UI state (
 
 **Core (pure logic, no React):** [src/core/](src/core/)
 - `tileGenerator.js` — draw mode: clones the base `ImageData` and applies borders per bitmask → `ImageData[48]`. Borders are applied in a **single pass** (`applyBorders`) so corner pixels aren't darkened multiple times; exposed edges are always **darkened** (corners a bit more than straight edges).
-- `proceduralGen.js` — procedural mode: paints each tile from a biome palette (fill + Bayer dither/patterns + border strips + inner-corner pixels).
+- `proceduralGen.js` — procedural mode. `generateAllBiomeTiles` paints each tile from a biome palette: primary fill + Bayer dither/patterns, then **textured borders** (`paintEdge` — irregular inner boundary + scattered border/shadow/highlight pixels, NOT a flat color bar) + inner-corner highlights. Also `generateTilesFromTextures(centerData, edgeData, tileSize, biomeColors)` — composes all 48 tiles from a **center texture + edge source** (edge = an AI/ImageData texture, e.g. snow, or null → synthesized from the border palette). It composes (never crops an AI sheet) so autotiling is always correct. Used by AI procedural generation (below).
 - `autotile.js` — level grid (`Uint8Array`, 1=solid/0=empty) → per-cell sheet index (`computeIndexMap`).
 - `levelGenerator.js` — `GENERATORS` map: caves (cellular automata), islands (value noise), platforms, rooms (dungeon), random. Seedable via mulberry32.
 - `exportSheet.js` — composites `ImageData[48]` into an 8×6 PNG and triggers download.
@@ -85,6 +85,9 @@ State lives in per-area hooks; `App.jsx` holds only the cross-cutting UI state (
 - Downscaling uses **progressive halving** (`stepDownToCanvas`), not one big `drawImage` — a single 1024→tiny resize looks blurry and washes out alpha. After scaling, `posterize` quantizes RGB to `POSTERIZE_LEVELS` (6) bands so the AI's soft gradient shading reads as crisp flat pixel art. The asset prompt (`STYLE_PREFIX_ASSET`) also explicitly demands flat colors / hard edges / no anti-aliasing.
 - **Alpha is left CONTINUOUS by the pipeline** (no auto-binarize). Edge cleanup is user-controlled via the **Edge solidity** slider in the Assets view: `useAssetEditor.applySolidify(threshold, commit)` binarizes alpha using `solidifyAlpha` (canvasUtils) — `≥ threshold → 255`, below `→ 0`. It re-derives from a stored **raw** buffer (`rawRef`, set by `loadPixels`, invalidated on manual drawing) so the slider drags both ways; `commit:false` previews, `commit:true` records history. `AssetsView` auto-applies a default solidity (128) right after a generation so the result looks clean immediately.
 - Target size is non-square: `pxW = cols*tileSize`, `pxH = rows*tileSize` (cols/rows 1..4).
+
+### AI procedural tilesets
+In procedural mode the sidebar has an `AIProceduralPanel` (separate from the instant palette `Generate procedural`). It asks for a **Center** prompt and an optional **Border** prompt, calls `generateBaseTileWithAI` once or twice (opaque square textures at tileSize), and hands them to `useTilesheet.generateFromTextures` → `generateTilesFromTextures`, which composes the 48 autotiles (center fill + border material on exposed edges). This yields rich material-on-material tilesets (e.g. cave rock with snow edges) while guaranteeing the tiles autotile, since they're composed by bitmask rather than cropped from an AI image.
 
 ## Persistence (Supabase)
 

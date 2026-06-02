@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react'
 import { generateAllTiles } from '../core/tileGenerator.js'
-import { generateAllBiomeTiles } from '../core/proceduralGen.js'
+import { generateAllBiomeTiles, generateTilesFromTextures } from '../core/proceduralGen.js'
 
 export function useTilesheet() {
   const [tiles, setTiles] = useState(null)
@@ -20,10 +20,18 @@ export function useTilesheet() {
     setReady(true)
   }, [])
 
+  // Compose 48 tiles from an AI center texture + optional AI edge texture
+  const generateFromTextures = useCallback((centerData, edgeData, tileSize, biomeColors) => {
+    setReady(false)
+    const result = generateTilesFromTextures(centerData, edgeData, tileSize, biomeColors)
+    setTiles(result)
+    setReady(true)
+  }, [])
+
   const clear = useCallback(() => {
     setTiles(null)
     setReady(false)
   }, [])
 
-  return { tiles, ready, generateFromBitmap, generateFromBiome, clear }
+  return { tiles, ready, generateFromBitmap, generateFromBiome, generateFromTextures, clear }
 }
