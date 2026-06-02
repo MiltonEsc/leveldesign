@@ -14,10 +14,12 @@ Guidance for Claude Code when working in this repository.
 
 ```bash
 npm install        # install deps
-npm run dev        # dev server (Vite) — required for the OpenAI proxy + .env.local
+npm run dev        # dev server (Vite) — required for the OpenAI proxy + reads .env.local
 npm run build      # production build to dist/
 npm run preview    # preview the production build
 ```
+
+`.env.local` (git-ignored) must provide `VITE_OPENAI_API_KEY` (AI generation) and `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` (persistence). Without the Supabase vars, the gallery hooks load empty and set an `error`. DB schema lives in `supabase/migrations/` (see Persistence).
 
 There is no test suite or linter configured. Verify changes by running `npm run dev` and exercising the UI (Playwright is a devDependency and is used for manual smoke tests; see git history of how it was driven).
 
@@ -31,7 +33,7 @@ Everything keys off an **8-bit neighbor bitmask** with a diagonal-pruning rule: 
 
 ## Architecture
 
-State lives in per-area hooks; `App.jsx` holds only the cross-cutting UI state (`activeView` = `'tileset' | 'level' | 'assets'`, `tileSize`, `mode`, `localBiome`, level zoom/sidebar state) and wires panels together. No Context, no external state lib — the tree is shallow, props are passed directly. The `assets` gallery hook is instantiated in `App.jsx` so it can be shared (Assets view now, Level Designer in Phase B).
+State lives in per-area hooks; `App.jsx` holds only the cross-cutting UI state (`activeView` = `'tileset' | 'level' | 'assets'`, `tileSize`, `mode`, `localBiome`, `levelTool`, level zoom/sidebar state) and wires panels together. No Context, no external state lib — the tree is shallow, props are passed directly. The `assets`/`tilesets`/`levels` gallery hooks are instantiated in `App.jsx` and shared across views — e.g. `assets` feeds both the Assets editor and the Level Designer's prop placement. Loading a saved tileset/level routes through `App.jsx#applyTilesetDefinition`, which regenerates the 48 tiles.
 
 **Core (pure logic, no React):** [src/core/](src/core/)
 - `tileGenerator.js` — draw mode: clones the base `ImageData` and applies borders per bitmask → `ImageData[48]`. Borders are applied in a **single pass** (`applyBorders`) so corner pixels aren't darkened multiple times; exposed edges are always **darkened** (corners a bit more than straight edges).
@@ -52,7 +54,9 @@ State lives in per-area hooks; `App.jsx` holds only the cross-cutting UI state (
 - `useAssets.js` / `useTilesets.js` / `useLevels.js` — gallery hooks backed by **Supabase** (see Persistence below). Each loads its table on mount (async, with `error` state), and `add/save`/`remove` call `src/lib/db.js` then update local state. Pixel buffers / grids are base64 via `src/lib/serialize.js`. No localStorage.
 - `useBiomeGallery.js` exists but is **not currently wired** — App manages the active biome via `localBiome` directly.
 
-**Components:** [src/components/](src/components/) grouped by area — `Editor/` (PixelCanvas, ToolBar, PaletteRow, ZoomControl, TilePreviewMosaic), `Generator/` (ModeToggle, ProceduralControls, GenerateButton, AITilePanel), `TileSheet/` (TileSheetPreview, TileCell, ExportButton), `BiomeGallery/`, `Level/` (LevelCanvas — autotiles terrain **and draws placed props on top** with a cursor ghost, LevelControls, PropPicker — pick which saved prop to place, `zoomConfig.js` — shared zoom bounds/helpers), `Assets/` (AssetsView, AssetCanvas, AssetAIPanel, SizeSelector, AssetGallery).
+**Components:** [src/components/](src/components/) grouped by area — `Editor/` (PixelCanvas, ToolBar, PaletteRow, ZoomControl, TilePreviewMosaic), `Generator/` (ModeToggle, ProceduralControls, GenerateButton, AITilePanel), `TileSheet/` (TileSheetPreview, TileCell, ExportButton, TilesetGallery — save/load cloud tilesets), `BiomeGallery/`, `Level/` (LevelCanvas — autotiles terrain **and draws placed props on top** with a cursor ghost, LevelControls, PropPicker — pick which saved prop to place, LevelStorage — save/load cloud levels, `zoomConfig.js` — shared zoom bounds/helpers), `Assets/` (AssetsView, AssetCanvas, AssetAIPanel, SizeSelector, AssetGallery).
+
+**Data layer:** [src/lib/](src/lib/) — `supabase.js` (client singleton), `db.js` (async CRUD per table), `serialize.js` (base64 codec). See Persistence below.
 
 ## Conventions
 
