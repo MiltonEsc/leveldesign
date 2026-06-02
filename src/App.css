@@ -596,20 +596,65 @@ body {
 /* ─── Level Designer view ───────────────────────────────────────────────── */
 .level-main {
   grid-template-columns: 240px 1fr;
+  transition: grid-template-columns 0.2s ease;
+}
+.level-main-collapsed {
+  grid-template-columns: 0 1fr;
 }
 .level-sidebar { gap: 16px; }
+.level-sidebar.collapsed {
+  padding: 0;
+  border-right: none;
+  overflow: hidden;
+}
 
 .level-canvas-area {
+  position: relative;
   display: flex;
-  align-items: center;
-  justify-content: center;
   overflow: auto;
   padding: 24px;
   background:
     radial-gradient(circle at 50% 40%, #14142a 0%, var(--bg) 70%);
 }
 
+/* Floating button to collapse/expand the side panel for more canvas space */
+.sidebar-toggle {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 10;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-light);
+  background: var(--bg-card);
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.sidebar-toggle:hover { border-color: var(--accent2); background: var(--bg-elevated); }
+
+.zoom-fit-btn {
+  margin-left: auto;
+  padding: 0 10px;
+  height: 28px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-light);
+  background: var(--bg-card);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.zoom-fit-btn:hover { border-color: var(--accent2); background: var(--bg-elevated); }
+
 .level-canvas-wrapper {
+  margin: auto; /* centers when small, allows full scroll when larger than area */
   border: 2px solid var(--border-light);
   border-radius: var(--radius);
   box-shadow: 0 6px 30px rgba(0,0,0,0.5);
@@ -725,3 +770,163 @@ body {
 ::-webkit-scrollbar       { width: 6px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 3px; }
+
+/* ─── Assets view ───────────────────────────────────────────────────────── */
+.assets-main { grid-template-columns: 220px 1fr 300px; }
+
+/* Checkerboard backdrop to visualize transparency */
+.checker-bg {
+  background-image:
+    linear-gradient(45deg, #3a3a48 25%, transparent 25%),
+    linear-gradient(-45deg, #3a3a48 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #3a3a48 75%),
+    linear-gradient(-45deg, transparent 75%, #3a3a48 75%);
+  background-size: 12px 12px;
+  background-position: 0 0, 0 6px, 6px -6px, -6px 0;
+  background-color: #2a2a36;
+}
+
+.assets-canvas-area { justify-content: flex-start; }
+.asset-edit-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.asset-canvas-wrapper {
+  border: 2px solid var(--border-light);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 30px rgba(0,0,0,0.5);
+}
+
+.asset-edit-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.asset-name-input {
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-light);
+  background: var(--bg-card);
+  color: var(--text);
+  font-size: 13px;
+  width: 130px;
+}
+.asset-clear-btn,
+.asset-save-btn {
+  padding: 7px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-light);
+  background: var(--bg-card);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.asset-clear-btn:hover { border-color: var(--accent2); background: var(--bg-elevated); }
+.asset-save-btn {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.asset-save-btn:hover { background: var(--accent); color: #fff; }
+
+/* Size selector */
+.size-selector { display: flex; flex-direction: column; gap: 6px; }
+.size-selector-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.size-selector-row { display: flex; align-items: center; gap: 8px; }
+.size-selector-group { display: flex; align-items: center; gap: 3px; }
+.size-selector-axis { font-size: 11px; color: var(--text-muted); margin-right: 2px; }
+.size-selector-x { color: var(--text-muted); }
+.size-cell-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-light);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.size-cell-btn:hover  { border-color: var(--accent2); color: var(--text); }
+.size-cell-btn.active { background: var(--accent2); border-color: var(--accent2); color: #fff; }
+.size-selector-info { font-size: 11px; color: var(--text-muted); }
+
+/* Asset gallery */
+.asset-gallery { display: flex; flex-direction: column; gap: 10px; padding: 12px; overflow-y: auto; }
+.asset-gallery-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.asset-gallery-title {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.asset-mini-btn {
+  padding: 5px 8px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-light);
+  background: var(--bg-card);
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+}
+.asset-mini-btn:hover:not(:disabled) { border-color: var(--accent2); }
+.asset-mini-btn:disabled { opacity: 0.3; cursor: default; }
+.asset-gallery-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+  text-align: center;
+  padding: 20px 8px;
+}
+.asset-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: 8px;
+}
+.asset-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 4px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-light);
+  background: var(--bg-card);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.asset-card:hover { border-color: var(--accent2); }
+.asset-card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.asset-card-name {
+  font-size: 10px;
+  color: var(--text);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.asset-card-actions { display: flex; gap: 2px; }
+.asset-card-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 1px 3px;
+  border-radius: 3px;
+  opacity: 0.7;
+}
+.asset-card-btn:hover { opacity: 1; background: var(--bg-elevated); }
+.asset-card-btn.danger:hover { background: #5a2030; }

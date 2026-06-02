@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { PixelCanvas }        from './components/Editor/PixelCanvas.jsx'
 import { ToolBar }            from './components/Editor/ToolBar.jsx'
 import { PaletteRow }         from './components/Editor/PaletteRow.jsx'
@@ -13,11 +13,14 @@ import { ExportButton }       from './components/TileSheet/ExportButton.jsx'
 import { BiomeGallery }       from './components/BiomeGallery/BiomeGallery.jsx'
 import { LevelCanvas }        from './components/Level/LevelCanvas.jsx'
 import { LevelControls }      from './components/Level/LevelControls.jsx'
+import { AssetsView }         from './components/Assets/AssetsView.jsx'
 import { useDrawingCanvas }   from './hooks/useDrawingCanvas.js'
 import { useTilesheet }       from './hooks/useTilesheet.js'
 import { useLevelMap }        from './hooks/useLevelMap.js'
+import { useAssets }          from './hooks/useAssets.js'
 import { BIOMES }             from './constants/biomes.js'
 import { GENERATORS }         from './core/levelGenerator.js'
+import { clampCellPx } from './components/Level/zoomConfig.js'
 
 export default function App() {
   const [activeView, setActiveView] = useState('tileset') // 'tileset' | 'level'
@@ -27,9 +30,27 @@ export default function App() {
   const drawing   = useDrawingCanvas(tileSize)
   const tilesheet = useTilesheet()
   const level     = useLevelMap(32, 20)
+  const assets    = useAssets()
 
-  const [cellPx, setCellPx]           = useState(18)
+  const [cellPx, setCellPxRaw]        = useState(18)
   const [showLevelGrid, setShowLevelGrid] = useState(true)
+  const [levelSidebarCollapsed, setLevelSidebarCollapsed] = useState(false)
+  const levelCanvasAreaRef = useRef(null)
+
+  // Clamp every cellPx update to the shared zoom bounds
+  const setCellPx = useCallback((next) => {
+    setCellPxRaw(prev => clampCellPx(typeof next === 'function' ? next(prev) : next))
+  }, [])
+
+  // Fit the whole map into the visible canvas area
+  const handleFitLevel = useCallback(() => {
+    const area = levelCanvasAreaRef.current
+    if (!area) return
+    const pad = 48 // matches .level-canvas-area padding ×2
+    const fitW = Math.floor((area.clientWidth  - pad) / level.width)
+    const fitH = Math.floor((area.clientHeight - pad) / level.height)
+    setCellPx(Math.min(fitW, fitH))
+  }, [level.width, level.height, setCellPx])
 
   const [localBiome, setLocalBiome] = useState(() => ({ ...BIOMES[0], colors: { ...BIOMES[0].colors } }))
 
@@ -91,6 +112,9 @@ export default function App() {
           </button>
           <button className={`view-tab ${activeView === 'level' ? 'active' : ''}`} onClick={() => setActiveView('level')}>
             🗺️ Level Designer
+          </button>
+          <button className={`view-tab ${activeView === 'assets' ? 'active' : ''}`} onClick={() => setActiveView('assets')}>
+            🧩 Assets
           </button>
         </div>
 
@@ -175,26 +199,36 @@ export default function App() {
       {/* ─── LEVEL VIEW ───────────────────────────────────────────────── */}
       {activeView === 'level' && (
         <>
-          <main className="app-main level-main">
-            <aside className="sidebar level-sidebar">
-              <LevelControls
-                width={level.width} height={level.height}
-                cellPx={cellPx} setCellPx={setCellPx}
-                showGrid={showLevelGrid} setShowGrid={setShowLevelGrid}
-                seamlessEdges={level.seamlessEdges} setSeamlessEdges={level.setSeamlessEdges}
-                onGenerate={(type) => level.generate(type)}
-                onClear={level.clear}
-                onFill={level.fillAll}
-                onResize={level.resize}
-                onRandomizeAll={handleSurprise}
-              />
+          <main className={`app-main level-main ${levelSidebarCollapsed ? 'level-main-collapsed' : ''}`}>
+            <aside className={`sidebar level-sidebar ${levelSidebarCollapsed ? 'collapsed' : ''}`}>
+              {!levelSidebarCollapsed && (
+                <LevelControls
+                  width={level.width} height={level.height}
+                  cellPx={cellPx} setCellPx={setCellPx}
+                  showGrid={showLevelGrid} setShowGrid={setShowLevelGrid}
+                  seamlessEdges={level.seamlessEdges} setSeamlessEdges={level.setSeamlessEdges}
+                  onGenerate={(type) => level.generate(type)}
+                  onClear={level.clear}
+                  onFill={level.fillAll}
+                  onResize={level.resize}
+                  onRandomizeAll={handleSurprise}
+                  onFit={handleFitLevel}
+                />
+              )}
             </aside>
 
-            <section className="level-canvas-area">
+            <section className="level-canvas-area" ref={levelCanvasAreaRef}>
+              <button
+                className="sidebar-toggle"
+                onClick={() => setLevelSidebarCollapsed(c => !c)}
+                title={levelSidebarCollapsed ? 'Show panel' : 'Hide panel (more canvas space)'}
+              >
+                {levelSidebarCollapsed ? '⟩' : '⟨'}
+              </button>
               {tilesheet.tiles ? (
                 <LevelCanvas
                   grid={level.grid} width={level.width} height={level.height}
-                  tiles={tilesheet.tiles} tileSize={tileSize} cellPx={cellPx}
+                  tiles={tilesheet.tiles} tileSize={tileSize} cellPx={cellPx} setCellPx={setCellPx}
                   seamlessEdges={level.seamlessEdges} showGrid={showLevelGrid}
                   onStartPaint={level.startPaint}
                   onContinuePaint={level.continuePaint}
@@ -210,6 +244,11 @@ export default function App() {
             <BiomeGallery biomes={BIOMES} activeBiomeId={localBiome.id} tileSize={tileSize} onSelectBiome={handleSelectBiome} />
           </footer>
         </>
+      )}
+
+      {/* ─── ASSETS VIEW ──────────────────────────────────────────────── */}
+      {activeView === 'assets' && (
+        <AssetsView tileSize={tileSize} gallery={assets} />
       )}
     </div>
   )

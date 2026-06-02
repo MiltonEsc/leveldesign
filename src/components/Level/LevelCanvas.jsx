@@ -1,14 +1,16 @@
-import { useRef, useEffect, useCallback, useMemo } from 'react'
+import { useRef, useEffect, useLayoutEffect, useCallback, useMemo } from 'react'
 import { computeIndexMap } from '../../core/autotile.js'
+import { MIN_CELL_PX, MAX_CELL_PX, ZOOM_STEP } from './zoomConfig.js'
 
 // Renders the level grid by autotiling it with the active tileset.
 export function LevelCanvas({
-  grid, width, height, tiles, tileSize, cellPx, seamlessEdges,
+  grid, width, height, tiles, tileSize, cellPx, setCellPx, seamlessEdges,
   showGrid, onStartPaint, onContinuePaint, onEndPaint,
 }) {
   const canvasRef = useRef(null)
   const gridRef   = useRef(null)
   const painting  = useRef(false)
+  const zoomAnchor = useRef(null) // pending cursor-centered zoom adjustment
 
   // Pre-render each tile to its own small canvas for fast drawImage blits
   const tileCanvases = useMemo(() => {
@@ -71,6 +73,41 @@ export function LevelCanvas({
       ctx.beginPath(); ctx.moveTo(0, y * cellPx); ctx.lineTo(dW, y * cellPx); ctx.stroke()
     }
   }, [width, height, cellPx, showGrid])
+
+  // Wheel zoom centered on the cursor. Uses a native non-passive listener so
+  // preventDefault() actually stops the page/container from scrolling.
+  useEffect(() => {
+    const el = canvasRef.current
+    if (!el || !setCellPx) return
+    const onWheel = (e) => {
+      e.preventDefault()
+      const dir = e.deltaY < 0 ? 1 : -1
+      const newCell = Math.max(MIN_CELL_PX, Math.min(MAX_CELL_PX, cellPx + dir * ZOOM_STEP))
+      if (newCell === cellPx) return
+      const rect = el.getBoundingClientRect()
+      zoomAnchor.current = {
+        worldX: (e.clientX - rect.left) / cellPx,
+        worldY: (e.clientY - rect.top)  / cellPx,
+        clientX: e.clientX,
+        clientY: e.clientY,
+      }
+      setCellPx(newCell)
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [cellPx, setCellPx])
+
+  // After a wheel-zoom re-render, scroll so the same world point stays under the cursor.
+  useLayoutEffect(() => {
+    const anchor = zoomAnchor.current
+    if (!anchor) return
+    zoomAnchor.current = null
+    const container = canvasRef.current?.closest('.level-canvas-area')
+    if (!container) return
+    const rect = canvasRef.current.getBoundingClientRect()
+    container.scrollLeft += (rect.left + anchor.worldX * cellPx) - anchor.clientX
+    container.scrollTop  += (rect.top  + anchor.worldY * cellPx) - anchor.clientY
+  }, [cellPx])
 
   const cellFromEvent = useCallback((e) => {
     const rect = canvasRef.current.getBoundingClientRect()

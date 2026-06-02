@@ -1,4 +1,5 @@
 import { GENERATORS } from '../../core/levelGenerator.js'
+import { MIN_CELL_PX, MAX_CELL_PX, ZOOM_STEP } from './zoomConfig.js'
 
 const SIZE_PRESETS = [
   { label: 'S',  w: 24, h: 16 },
@@ -10,7 +11,7 @@ const SIZE_PRESETS = [
 export function LevelControls({
   width, height, cellPx, setCellPx,
   showGrid, setShowGrid, seamlessEdges, setSeamlessEdges,
-  onGenerate, onClear, onFill, onResize, onRandomizeAll,
+  onGenerate, onClear, onFill, onResize, onRandomizeAll, onFit,
 }) {
   return (
     <div className="level-controls">
@@ -58,10 +59,12 @@ export function LevelControls({
       <div className="level-section">
         <div className="level-section-label">🔍 Zoom</div>
         <div className="zoom-control">
-          <button className="zoom-btn" onClick={() => setCellPx(p => Math.max(6, p - 2))} disabled={cellPx <= 6}>−</button>
+          <button className="zoom-btn" onClick={() => setCellPx(p => p - ZOOM_STEP)} disabled={cellPx <= MIN_CELL_PX}>−</button>
           <span className="zoom-label">{cellPx}px</span>
-          <button className="zoom-btn" onClick={() => setCellPx(p => Math.min(40, p + 2))} disabled={cellPx >= 40}>+</button>
+          <button className="zoom-btn" onClick={() => setCellPx(p => p + ZOOM_STEP)} disabled={cellPx >= MAX_CELL_PX}>+</button>
+          <button className="zoom-fit-btn" onClick={onFit} title="Fit map to screen">⊡ Fit</button>
         </div>
+        <div className="level-hint">Scroll wheel over the canvas to zoom</div>
       </div>
 
       <div className="level-section">
