@@ -3,6 +3,23 @@ import { generateBaseTileWithAI, AI_MODELS } from '../../core/aiTile.js'
 
 const LS_KEY = 'openai_api_key'
 const LS_MODEL = 'openai_image_model'
+const TEXTURE_PRESETS = [
+  {
+    label: 'Frozen cavern',
+    center: 'dark cave rock with subtle moss, pixel art texture',
+    border: 'powder snow with icy sparkle, pixel art texture',
+  },
+  {
+    label: 'Desert ruins',
+    center: 'sun-baked sandstone floor, pixel art texture',
+    border: 'wind-blown sand drift, pixel art texture',
+  },
+  {
+    label: 'Corrupted forest',
+    center: 'muddy forest ground with roots, pixel art texture',
+    border: 'glowing toxic moss edge, pixel art texture',
+  },
+]
 
 function loadKey() {
   return localStorage.getItem(LS_KEY) || import.meta.env.VITE_OPENAI_API_KEY || ''
@@ -42,6 +59,22 @@ export function AIProceduralPanel({ tileSize, onGenerated }) {
   return (
     <div className="ai-panel">
       <div className="panel-label">AI textures</div>
+      <div className="ai-hint">Use a center material plus an optional edge material to build a full autotile set.</div>
+
+      <div className="ai-preset-stack">
+        {TEXTURE_PRESETS.map((preset) => (
+          <button
+            key={preset.label}
+            className="ai-preset-block"
+            type="button"
+            onClick={() => { setCenter(preset.center); setBorder(preset.border) }}
+            disabled={loading}
+          >
+            <span className="ai-preset-title">{preset.label}</span>
+            <span className="ai-preset-copy">{preset.center}</span>
+          </button>
+        ))}
+      </div>
 
       <textarea
         className="ai-prompt"

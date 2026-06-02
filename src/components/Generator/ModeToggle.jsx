@@ -1,17 +1,17 @@
 export function ModeToggle({ mode, setMode }) {
   return (
-    <div className="mode-toggle">
+    <div className="mode-toggle generator-panel">
       <button
         className={`mode-btn ${mode === 'draw' ? 'active' : ''}`}
         onClick={() => setMode('draw')}
       >
-        Draw
+        Pixel Art
       </button>
       <button
         className={`mode-btn ${mode === 'procedural' ? 'active' : ''}`}
         onClick={() => setMode('procedural')}
       >
-        Procedural
+        Img to Pixel
       </button>
     </div>
   )

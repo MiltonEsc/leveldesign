@@ -145,6 +145,12 @@ export function useDrawingCanvas(tileSize) {
     return new ImageData(new Uint8ClampedArray(pixels), size, size)
   }, [pixels])
 
+  const clear = useCallback(() => {
+    pushHistory(pixels)
+    setPixels(makeBlankPixels(currentTileSize.current))
+    setPreview(null)
+  }, [pixels, pushHistory])
+
   return {
     pixels: preview || pixels,
     committedPixels: pixels,
@@ -155,6 +161,7 @@ export function useDrawingCanvas(tileSize) {
     startStroke, continueStroke, endStroke,
     undo, redo,
     resetCanvas,
+    clear,
     loadPixels,
     getImageData,
     canUndo: historyIndex > 0,

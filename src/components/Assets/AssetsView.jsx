@@ -14,7 +14,7 @@ function fitZoom(pxW, pxH) {
   return Math.max(1, Math.min(28, Math.floor(340 / Math.max(pxW, pxH))))
 }
 
-export function AssetsView({ tileSize, gallery }) {
+export function AssetsView({ tileSize, gallery, editorKind, setEditorKind }) {
   const [cols, setCols] = useState(2)
   const [rows, setRows] = useState(2)
   const [workTileSize, setWorkTileSize] = useState(tileSize)
@@ -68,11 +68,27 @@ export function AssetsView({ tileSize, gallery }) {
   return (
     <main className="app-main assets-main">
       <aside className="sidebar">
+        <div className="editor-side-nav">
+          <button
+            className={`editor-side-tab ${editorKind === 'tileset' ? 'active' : ''}`}
+            onClick={() => setEditorKind('tileset')}
+          >
+            Tileset
+          </button>
+          <button
+            className={`editor-side-tab ${editorKind === 'prop' ? 'active' : ''}`}
+            onClick={() => setEditorKind('prop')}
+          >
+            Assets
+          </button>
+        </div>
         <ToolBar
           tool={editor.tool} setTool={editor.setTool}
           brush={editor.brush} setBrush={editor.setBrush}
           onUndo={editor.undo} onRedo={editor.redo}
           canUndo={editor.canUndo} canRedo={editor.canRedo}
+          onClear={editor.clear}
+          clearLabel="Clear asset"
         />
         <PaletteRow activeColor={editor.activeColor} setActiveColor={editor.setActiveColor} />
         <SizeSelector cols={cols} rows={rows} tileSize={workTileSize} onChange={handleSizeChange} />

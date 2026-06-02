@@ -87,6 +87,9 @@ export default function App() {
   }, [level.width, level.height, setCellPx])
 
   const [localBiome, setLocalBiome] = useState(() => ({ ...BIOMES[0], colors: { ...BIOMES[0].colors } }))
+  // Stores the raw AI pixel arrays when the current tileset was generated via AI procedural.
+  // Cleared whenever the user generates non-AI tiles (biome palette or draw).
+  const [aiTextures, setAiTextures] = useState(null) // { center: Uint8ClampedArray, edge: Uint8ClampedArray|null }
 
   // Auto-generate default tileset on first load
   useEffect(() => {
@@ -114,6 +117,7 @@ export default function App() {
     if (mode === 'draw') {
       tilesheet.generateFromBitmap(drawing.getImageData(), tileSize)
     } else {
+      setAiTextures(null)
       tilesheet.generateFromBiome(localBiome, tileSize)
     }
   }
@@ -121,6 +125,7 @@ export default function App() {
   const handleSelectBiome = useCallback((biome) => {
     const fresh = { ...biome, colors: { ...biome.colors } }
     setLocalBiome(fresh)
+    setAiTextures(null)
     tilesheet.generateFromBiome(fresh, tileSize)
   }, [tileSize, tilesheet])
 
@@ -128,31 +133,80 @@ export default function App() {
     setLocalBiome(prev => ({ ...prev, colors: { ...prev.colors, [key]: value } }))
   }
 
+  const handleResetBiomeColors = useCallback(() => {
+    const base = BIOME_MAP[localBiome.id] || BIOMES[0]
+    setLocalBiome(prev => ({ ...prev, colors: { ...base.colors } }))
+  }, [localBiome.id])
+
+  const handleShuffleBiomeColors = useCallback(() => {
+    const vary = (hex, amount) => {
+      const value = hex.replace('#', '')
+      const clamp = (n) => Math.max(0, Math.min(255, n))
+      const next = [0, 2, 4].map((i) => {
+        const channel = parseInt(value.slice(i, i + 2), 16)
+        const drift = Math.round((Math.random() * 2 - 1) * amount)
+        return clamp(channel + drift).toString(16).padStart(2, '0')
+      })
+      return `#${next.join('')}`
+    }
+
+    setLocalBiome(prev => ({
+      ...prev,
+      colors: {
+        primary: vary(prev.colors.primary, 22),
+        secondary: vary(prev.colors.secondary, 20),
+        border: vary(prev.colors.border, 18),
+        highlight: vary(prev.colors.highlight, 24),
+        shadow: vary(prev.colors.shadow, 18),
+      },
+    }))
+  }, [])
+
   // AI procedural: compose 48 autotiles from an AI center texture + optional edge
   const handleAIProcedural = useCallback((centerPixels, edgePixels) => {
-    const centerData = new ImageData(new Uint8ClampedArray(centerPixels), tileSize, tileSize)
-    const edgeData = edgePixels ? new ImageData(new Uint8ClampedArray(edgePixels), tileSize, tileSize) : null
+    const center = new Uint8ClampedArray(centerPixels)
+    const edge   = edgePixels ? new Uint8ClampedArray(edgePixels) : null
+    const centerData = new ImageData(center, tileSize, tileSize)
+    const edgeData   = edge ? new ImageData(edge, tileSize, tileSize) : null
     tilesheet.generateFromTextures(centerData, edgeData, tileSize, localBiome.colors)
+    setAiTextures({ center, edge })
   }, [tileSize, tilesheet, localBiome])
 
   // Builds the definition that regenerates the current tileset's 48 tiles.
-  const currentTilesetDefinition = useCallback(() => (
-    mode === 'draw'
-      ? { mode: 'draw', basePixels: bytesToBase64(drawing.committedPixels) }
-      : { mode: 'procedural', biomeId: localBiome.id, colors: localBiome.colors }
-  ), [mode, drawing.committedPixels, localBiome])
+  const currentTilesetDefinition = useCallback(() => {
+    if (mode === 'draw') return { mode: 'draw', basePixels: bytesToBase64(drawing.committedPixels) }
+    if (aiTextures) return {
+      mode: 'textures',
+      centerPixels: bytesToBase64(aiTextures.center),
+      edgePixels: aiTextures.edge ? bytesToBase64(aiTextures.edge) : null,
+      colors: localBiome.colors,
+    }
+    return { mode: 'procedural', biomeId: localBiome.id, colors: localBiome.colors }
+  }, [mode, drawing.committedPixels, localBiome, aiTextures])
 
   // Regenerates the 48 tiles from a saved tileset definition at `size`.
   const applyTilesetDefinition = useCallback((def, size) => {
     if (!def) return
     if (def.mode === 'draw') {
       setMode('draw')
+      setAiTextures(null)
       const bytes = base64ToBytes(def.basePixels)
       const side = Math.round(Math.sqrt(bytes.length / 4))
       tilesheet.generateFromBitmap(new ImageData(new Uint8ClampedArray(bytes), side, side), size)
       return bytes
     }
+    if (def.mode === 'textures') {
+      setMode('procedural')
+      const center = new Uint8ClampedArray(base64ToBytes(def.centerPixels))
+      const edge   = def.edgePixels ? new Uint8ClampedArray(base64ToBytes(def.edgePixels)) : null
+      const centerData = new ImageData(center, size, size)
+      const edgeData   = edge ? new ImageData(edge, size, size) : null
+      tilesheet.generateFromTextures(centerData, edgeData, size, def.colors || {})
+      setAiTextures({ center, edge })
+      return null
+    }
     setMode('procedural')
+    setAiTextures(null)
     const base = BIOME_MAP[def.biomeId] || BIOMES[0]
     const biome = { ...base, colors: { ...base.colors, ...def.colors } }
     setLocalBiome(biome)
@@ -223,6 +277,30 @@ export default function App() {
     />
   )
 
+  const editorSummary = (
+    <div className="workspace-summary">
+      <div className="workspace-summary-label">Workspace</div>
+      <div className="workspace-summary-grid">
+        <div className="workspace-stat">
+          <span className="workspace-stat-value">{tileSize}px</span>
+          <span className="workspace-stat-label">Tile size</span>
+        </div>
+        <div className="workspace-stat">
+          <span className="workspace-stat-value">{mode === 'draw' ? 'Draw' : 'Procedural'}</span>
+          <span className="workspace-stat-label">Mode</span>
+        </div>
+        <div className="workspace-stat">
+          <span className="workspace-stat-value">{tilesets.tilesets.length}</span>
+          <span className="workspace-stat-label">Saved tilesets</span>
+        </div>
+        <div className="workspace-stat">
+          <span className="workspace-stat-value">{assets.assets.length}</span>
+          <span className="workspace-stat-label">Saved props</span>
+        </div>
+      </div>
+    </div>
+  )
+
   return (
     <div className="app">
       {/* Header */}
@@ -242,18 +320,15 @@ export default function App() {
         </div>
 
         <div className="header-controls">
-          {activeView === 'editor' && (
-            <div className="kind-toggle">
-              <button className={`kind-btn ${editorKind === 'tileset' ? 'active' : ''}`} onClick={() => setEditorKind('tileset')}>Tileset</button>
-              <button className={`kind-btn ${editorKind === 'prop' ? 'active' : ''}`} onClick={() => setEditorKind('prop')}>Prop</button>
-            </div>
-          )}
           <div className="tile-size-toggle" title="Tile size">
-            {[8, 16, 64].map(s => (
-              <button key={s} className={`tile-size-btn ${tileSize === s ? 'active' : ''}`} onClick={() => handleTileSizeChange(s)}>
-                {s}
-              </button>
-            ))}
+            <span className="tile-size-heading">Grid size</span>
+            <div className="tile-size-button-row">
+              {[8, 16, 64].map(s => (
+                <button key={s} className={`tile-size-btn ${tileSize === s ? 'active' : ''}`} onClick={() => handleTileSizeChange(s)}>
+                  {s}
+                </button>
+              ))}
+            </div>
           </div>
           {activeView === 'editor' && editorKind === 'tileset' && <ModeToggle mode={mode} setMode={setMode} />}
         </div>
@@ -264,12 +339,29 @@ export default function App() {
         <>
           <main className="app-main">
             <aside className="sidebar">
+              <div className="editor-side-nav">
+                <button
+                  className={`editor-side-tab ${editorKind === 'tileset' ? 'active' : ''}`}
+                  onClick={() => setEditorKind('tileset')}
+                >
+                  Tileset
+                </button>
+                <button
+                  className={`editor-side-tab ${editorKind === 'prop' ? 'active' : ''}`}
+                  onClick={() => setEditorKind('prop')}
+                >
+                  Assets
+                </button>
+              </div>
+              <ModeToggle mode={mode} setMode={setMode} />
               {mode === 'draw' && (
                 <ToolBar
                   tool={drawing.tool} setTool={drawing.setTool}
                   brush={drawing.brush} setBrush={drawing.setBrush}
                   onUndo={drawing.undo} onRedo={drawing.redo}
                   canUndo={drawing.canUndo} canRedo={drawing.canRedo}
+                  onClear={drawing.clear}
+                  clearLabel="Clear grid"
                 />
               )}
               <PaletteRow activeColor={drawing.activeColor} setActiveColor={drawing.setActiveColor} />
@@ -281,13 +373,19 @@ export default function App() {
               )}
               {mode === 'procedural' && (
                 <>
-                  <ProceduralControls biome={localBiome} onColorChange={handleColorChange} />
+                  <ProceduralControls
+                    biome={localBiome}
+                    onColorChange={handleColorChange}
+                    onResetColors={handleResetBiomeColors}
+                    onShuffleColors={handleShuffleBiomeColors}
+                  />
                   <AIProceduralPanel tileSize={tileSize} onGenerated={handleAIProcedural} />
                 </>
               )}
             </aside>
 
             <section className="canvas-area">
+              {editorSummary}
               {mode === 'draw' ? (
                 <div className="draw-layout">
                   <div className="canvas-container">
@@ -329,7 +427,7 @@ export default function App() {
 
       {activeView === 'editor' && editorKind === 'prop' && (
         <>
-          <AssetsView tileSize={tileSize} gallery={assets} />
+          <AssetsView tileSize={tileSize} gallery={assets} editorKind={editorKind} setEditorKind={setEditorKind} />
           <footer className="app-footer">
             {galleryDock}
           </footer>
@@ -376,6 +474,12 @@ export default function App() {
             </aside>
 
             <section className="level-canvas-area" ref={levelCanvasAreaRef}>
+              <div className="level-status-bar">
+                <span className="level-status-pill">Map {level.width} x {level.height}</span>
+                <span className="level-status-pill">Zoom {cellPx}px</span>
+                <span className="level-status-pill">Props {level.placedProps.length}</span>
+                <span className="level-status-pill">Tileset {tileSize}px</span>
+              </div>
               <button
                 className="sidebar-toggle"
                 onClick={() => setLevelSidebarCollapsed(c => !c)}

@@ -1,49 +1,64 @@
 const TOOLS = [
-  { id: 'pencil',     label: 'Pen' },
-  { id: 'eraser',     label: 'Erase' },
-  { id: 'fill',       label: 'Fill' },
-  { id: 'line',       label: 'Line' },
-  { id: 'rect',       label: 'Rect' },
-  { id: 'rectFill',   label: 'Rect fill' },
-  { id: 'eyedropper', label: 'Pick' },
+  { id: 'pencil', label: 'Pen', icon: '✎' },
+  { id: 'eraser', label: 'Erase', icon: '⌫' },
+  { id: 'fill', label: 'Fill', icon: '▣' },
+  { id: 'line', label: 'Line', icon: '/' },
+  { id: 'rect', label: 'Rect', icon: '□' },
+  { id: 'rectFill', label: 'Rect fill', icon: '▦' },
+  { id: 'eyedropper', label: 'Pick', icon: '◎' },
 ]
 
-const BRUSH_SIZES = [1, 2, 3, 4]
+const BRUSH_MIN = 1
+const BRUSH_MAX = 4
 
-export function ToolBar({ tool, setTool, brush, setBrush, onUndo, onRedo, canUndo, canRedo }) {
+export function ToolBar({
+  tool, setTool, brush, setBrush,
+  onUndo, onRedo, canUndo, canRedo,
+  onClear, clearLabel = 'Clear grid',
+}) {
   return (
-    <div className="toolbar">
-      <div className="panel-label">Tools</div>
+    <div className="sidebar-card toolbar toolbar-card">
+      <div className="sidebar-card-title">Draw tools</div>
+
       <div className="tool-grid">
-        {TOOLS.map(t => (
+        {TOOLS.map((t) => (
           <button
             key={t.id}
-            className={`tool-btn ${tool === t.id ? 'active' : ''}`}
+            className={`tool-btn tool-icon-btn ${tool === t.id ? 'active' : ''}`}
             onClick={() => setTool(t.id)}
+            title={t.label}
           >
-            {t.label}
+            <span className="tool-icon-glyph" aria-hidden="true">{t.icon}</span>
           </button>
         ))}
       </div>
 
-      <div className="brush-row">
-        <span className="brush-label">Brush</span>
-        {BRUSH_SIZES.map(s => (
-          <button
-            key={s}
-            className={`brush-btn ${brush === s ? 'active' : ''}`}
-            title={`${s}×${s} px`}
-            onClick={() => setBrush(s)}
-          >
-            {s}
-          </button>
-        ))}
+      <div className="sidebar-subsection">
+        <div className="sidebar-inline-label">
+          <span className="brush-label">Brush size</span>
+          <span className="brush-value">{brush}px</span>
+        </div>
+        <input
+          className="brush-slider"
+          type="range"
+          min={BRUSH_MIN}
+          max={BRUSH_MAX}
+          step="1"
+          value={brush}
+          onChange={(e) => setBrush(Number(e.target.value))}
+        />
       </div>
 
       <div className="undo-row">
         <button className="undo-btn" onClick={onUndo} disabled={!canUndo}>Undo</button>
         <button className="undo-btn" onClick={onRedo} disabled={!canRedo}>Redo</button>
       </div>
+
+      {onClear && (
+        <button className="toolbar-clear-btn" onClick={onClear}>
+          {clearLabel}
+        </button>
+      )}
     </div>
   )
 }
