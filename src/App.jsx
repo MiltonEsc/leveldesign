@@ -10,8 +10,7 @@ import { GenerateButton }     from './components/Generator/GenerateButton.jsx'
 import { AITilePanel }        from './components/Generator/AITilePanel.jsx'
 import { TileSheetPreview }   from './components/TileSheet/TileSheetPreview.jsx'
 import { ExportButton }       from './components/TileSheet/ExportButton.jsx'
-import { TilesetGallery }     from './components/TileSheet/TilesetGallery.jsx'
-import { BiomeGallery }       from './components/BiomeGallery/BiomeGallery.jsx'
+import { GalleryDock }        from './components/BiomeGallery/GalleryDock.jsx'
 import { LevelCanvas }        from './components/Level/LevelCanvas.jsx'
 import { LevelControls }      from './components/Level/LevelControls.jsx'
 import { PropPicker }         from './components/Level/PropPicker.jsx'
@@ -197,6 +196,24 @@ export default function App() {
     level.generate(key)
   }, [level])
 
+  // Shared bottom dock (biomes + saved tilesets, and a Props tab), used by both views
+  const galleryDock = (
+    <GalleryDock
+      biomes={BIOMES}
+      activeBiomeId={localBiome.id}
+      tileSize={tileSize}
+      onSelectBiome={handleSelectBiome}
+      tilesets={tilesets.tilesets}
+      defaultName={mode === 'draw' ? 'Drawn tileset' : localBiome.label}
+      onSaveTileset={handleSaveTileset}
+      onLoadTileset={handleLoadTileset}
+      onRemoveTileset={tilesets.remove}
+      assets={assets.assets}
+      selectedAssetId={assets.selectedId}
+      onSelectAsset={assets.select}
+    />
+  )
+
   return (
     <div className="app">
       {/* Header */}
@@ -284,18 +301,11 @@ export default function App() {
             <aside className="preview-panel">
               <TileSheetPreview tiles={tilesheet.tiles} tileSize={tileSize} />
               <ExportButton tiles={tilesheet.tiles} tileSize={tileSize} biomeName={localBiome?.id} />
-              <TilesetGallery
-                tilesets={tilesets.tilesets}
-                defaultName={mode === 'draw' ? 'Drawn tileset' : localBiome.label}
-                onSave={handleSaveTileset}
-                onLoad={handleLoadTileset}
-                onRemove={tilesets.remove}
-              />
             </aside>
           </main>
 
           <footer className="app-footer">
-            <BiomeGallery biomes={BIOMES} activeBiomeId={localBiome.id} tileSize={tileSize} onSelectBiome={handleSelectBiome} />
+            {galleryDock}
           </footer>
         </>
       )}
@@ -369,7 +379,7 @@ export default function App() {
           </main>
 
           <footer className="app-footer">
-            <BiomeGallery biomes={BIOMES} activeBiomeId={localBiome.id} tileSize={tileSize} onSelectBiome={handleSelectBiome} />
+            {galleryDock}
           </footer>
         </>
       )}
