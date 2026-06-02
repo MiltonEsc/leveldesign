@@ -227,7 +227,10 @@ export default function App() {
     <div className="app">
       {/* Header */}
       <header className="app-header">
-        <h1 className="app-title">Tileset Studio</h1>
+        <div className="app-brand">
+          <span className="app-logo" aria-hidden="true" />
+          <h1 className="app-title">Tileset Studio</h1>
+        </div>
 
         <div className="view-tabs">
           <button className={`view-tab ${activeView === 'editor' ? 'active' : ''}`} onClick={() => setActiveView('editor')}>
