@@ -1,141 +1,123 @@
 import { useState, useEffect, useRef } from 'react'
-import { BiomeCard } from './BiomeCard.jsx'
-import { SavedTilesetCard } from './SavedTilesetCard.jsx'
+import { Segmented } from '../ui/Segmented.jsx'
+import { Btn }       from '../ui/Btn.jsx'
 
-// Thumbnail of a saved prop (transparent-aware)
-function PropThumb({ asset, size = 44 }) {
+// Palette-stripe thumbnail for a tileset/biome (hero color + stacked rest).
+function PaletteThumb({ colors }) {
+  const c = colors || {}
+  const hero = c.primary || '#3a3f47'
+  const rest = [c.secondary, c.border, c.highlight, c.shadow].filter(Boolean)
+  return (
+    <div style={{ position: 'absolute', inset: 0, display: 'flex' }}>
+      <div style={{ flex: 2, background: hero }} />
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+        {rest.map((col, i) => <div key={i} style={{ flex: 1, background: col }} />)}
+      </div>
+    </div>
+  )
+}
+
+// Transparent-aware prop thumbnail rendered from pixel data.
+function PropThumb({ asset }) {
   const ref = useRef(null)
   const pxW = asset.cols * asset.tileSize
   const pxH = asset.rows * asset.tileSize
   useEffect(() => {
-    const canvas = ref.current
-    if (!canvas) return
-    const ctx = canvas.getContext('2d')
+    const cv = ref.current
+    if (!cv) return
+    const box = 100
+    cv.width = box; cv.height = box
+    const ctx = cv.getContext('2d')
     ctx.imageSmoothingEnabled = false
-    ctx.clearRect(0, 0, size, size)
-    const scale = Math.min(size / pxW, size / pxH)
+    ctx.clearRect(0, 0, box, box)
+    const scale = Math.min(box / pxW, box / pxH)
     const dW = pxW * scale, dH = pxH * scale
     const tmp = document.createElement('canvas')
     tmp.width = pxW; tmp.height = pxH
     tmp.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(asset.pixels), pxW, pxH), 0, 0)
-    ctx.drawImage(tmp, (size - dW) / 2, (size - dH) / 2, dW, dH)
-  }, [asset, pxW, pxH, size])
-  return <canvas ref={ref} width={size} height={size} className="checker-bg" style={{ imageRendering: 'pixelated', borderRadius: 4 }} />
+    ctx.drawImage(tmp, (box - dW) / 2, (box - dH) / 2, dW, dH)
+  }, [asset, pxW, pxH])
+  return <canvas ref={ref} />
 }
 
-// Tabbed bottom dock: Tilesets (preset biomes + cloud-saved tilesets) and Props.
+// Bottom library drawer: Tilesets (biome presets + cloud-saved) and Props.
 export function GalleryDock({
-  biomes, activeBiomeId, tileSize, onSelectBiome,
+  biomes, activeBiomeId, onSelectBiome,
   tilesets, defaultName, onSaveTileset, onLoadTileset, onRemoveTileset,
   assets, selectedAssetId, onSelectAsset,
 }) {
   const [tab, setTab] = useState('tilesets')
+  const [scope, setScope] = useState('all')
+  const [search, setSearch] = useState('')
   const [name, setName] = useState('')
-  const [query, setQuery] = useState('')
-  const [tilesetScope, setTilesetScope] = useState('all')
 
-  const handleSave = () => {
-    onSaveTileset(name.trim() || defaultName)
-    setName('')
-  }
+  const q = search.trim().toLowerCase()
+  const biomeList = biomes.filter(b => b.label.toLowerCase().includes(q) || b.id.toLowerCase().includes(q))
+  const savedList = tilesets.filter(t => t.name.toLowerCase().includes(q))
+  const propList  = assets.filter(a => a.name.toLowerCase().includes(q))
 
-  const normalizedQuery = query.trim().toLowerCase()
-  const filteredBiomes = biomes.filter((biome) =>
-    biome.label.toLowerCase().includes(normalizedQuery) || biome.id.toLowerCase().includes(normalizedQuery)
-  )
-  const filteredTilesets = tilesets.filter((tileset) =>
-    tileset.name.toLowerCase().includes(normalizedQuery)
-  )
-  const filteredAssets = assets.filter((asset) =>
-    asset.name.toLowerCase().includes(normalizedQuery)
-  )
+  const handleSave = () => { onSaveTileset(name.trim() || defaultName); setName('') }
+
+  const showBiomes = tab === 'tilesets' && scope !== 'saved'
+  const showSaved  = tab === 'tilesets' && scope !== 'biomes'
 
   return (
-    <div className="gallery-dock">
-      <div className="gallery-dock-head">
-        <div className="gallery-dock-left">
-          <div className="gallery-tabs">
-            <button className={`gallery-tab ${tab === 'tilesets' ? 'active' : ''}`} onClick={() => setTab('tilesets')}>
-              Tilesets
-            </button>
-            <button className={`gallery-tab ${tab === 'props' ? 'active' : ''}`} onClick={() => setTab('props')}>
-              Props ({assets.length})
-            </button>
+    <footer className="library">
+      <div className="lib-head">
+        <Segmented size="sm" value={tab} onChange={setTab}
+          options={[{ value: 'tilesets', label: 'Tilesets' }, { value: 'props', label: `Props · ${assets.length}` }]} />
+        {tab === 'tilesets' && (
+          <div className="lib-filters">
+            {[['all', 'All'], ['biomes', 'Biomes'], ['saved', 'Saved']].map(([v, l]) => (
+              <button key={v} className={`filter-chip ${scope === v ? 'on' : ''}`} onClick={() => setScope(v)}>{l}</button>
+            ))}
           </div>
-          {tab === 'tilesets' && (
-            <div className="gallery-scope">
-              <button className={`gallery-scope-btn ${tilesetScope === 'all' ? 'active' : ''}`} onClick={() => setTilesetScope('all')}>All</button>
-              <button className={`gallery-scope-btn ${tilesetScope === 'biomes' ? 'active' : ''}`} onClick={() => setTilesetScope('biomes')}>Biomes</button>
-              <button className={`gallery-scope-btn ${tilesetScope === 'saved' ? 'active' : ''}`} onClick={() => setTilesetScope('saved')}>Saved</button>
-            </div>
-          )}
-        </div>
-
-        <div className="gallery-head-actions">
-          <input
-            className="gallery-filter-input"
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            placeholder={tab === 'tilesets' ? 'Filter tilesets or biomes' : 'Filter props'}
-          />
-
-          {tab === 'tilesets' && (
-            <div className="gallery-save">
-              <input
-                className="gallery-save-input"
-                value={name}
-                onChange={e => setName(e.target.value)}
-                placeholder={defaultName}
-              />
-              <button className="gallery-save-btn" onClick={handleSave} title="Save current tileset to the gallery">Save</button>
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="gallery-dock-row">
-        {tab === 'tilesets' ? (
+        )}
+        <div className="spacer" />
+        <input className="text-input lib-search" value={search} onChange={e => setSearch(e.target.value)}
+          placeholder={tab === 'tilesets' ? 'Filter tilesets…' : 'Filter props…'} />
+        {tab === 'tilesets' && (
           <>
-            {tilesetScope !== 'saved' && filteredBiomes.map(biome => (
-              <BiomeCard
-                key={biome.id}
-                biome={biome}
-                tileSize={tileSize}
-                isActive={biome.id === activeBiomeId}
-                onClick={() => onSelectBiome(biome)}
-              />
-            ))}
-            {tilesetScope !== 'biomes' && filteredTilesets.map(t => (
-              <SavedTilesetCard key={t.id} tileset={t} onLoad={onLoadTileset} onRemove={onRemoveTileset} />
-            ))}
-            {((tilesetScope !== 'saved' && filteredBiomes.length === 0) && (tilesetScope !== 'biomes' && filteredTilesets.length === 0)) && (
-              <div className="gallery-dock-empty">No matches for that filter.</div>
-            )}
-            {(tilesetScope === 'saved' && filteredTilesets.length === 0) && (
-              <div className="gallery-dock-empty">No saved tilesets match that filter.</div>
-            )}
-            {(tilesetScope === 'biomes' && filteredBiomes.length === 0) && (
-              <div className="gallery-dock-empty">No biome presets match that filter.</div>
-            )}
+            <input className="text-input lib-name" value={name} onChange={e => setName(e.target.value)} placeholder={defaultName} />
+            <Btn variant="primary" size="sm" icon="save" onClick={handleSave}>Save</Btn>
           </>
-        ) : (
-          filteredAssets.length === 0 ? (
-            <div className="gallery-dock-empty">No props yet. Create them in the Assets view, then place them on a level.</div>
-          ) : (
-            filteredAssets.map(a => (
-              <button
-                key={a.id}
-                className={`prop-dock-card ${selectedAssetId === a.id ? 'selected' : ''}`}
-                onClick={() => onSelectAsset(a.id)}
-                title={`${a.name} · ${a.cols}×${a.rows}`}
-              >
-                <PropThumb asset={a} />
-                <span className="prop-dock-name">{a.name}</span>
-              </button>
-            ))
-          )
         )}
       </div>
-    </div>
+
+      <div className="lib-rail">
+        {tab === 'tilesets' ? (
+          <>
+            {showBiomes && biomeList.map(b => (
+              <button key={b.id} className={`lib-card ${b.id === activeBiomeId ? 'on' : ''}`} onClick={() => onSelectBiome(b)}>
+                <div className="lib-thumb"><PaletteThumb colors={b.colors} /></div>
+                <div className="lib-card-foot"><span className="lib-card-name">{b.label}</span></div>
+              </button>
+            ))}
+            {showSaved && savedList.map(t => (
+              <div key={t.id} className="lib-card" onClick={() => onLoadTileset(t)}>
+                <div className="lib-thumb"><PaletteThumb colors={t.definition?.colors} /></div>
+                <div className="lib-card-foot">
+                  <span className="lib-card-name">{t.name}</span>
+                  <span className="lib-tag">saved</span>
+                  <button className="lib-card-del" title="Delete" onClick={(e) => { e.stopPropagation(); onRemoveTileset(t.id) }}>×</button>
+                </div>
+              </div>
+            ))}
+            {showBiomes && showSaved && biomeList.length === 0 && savedList.length === 0 && <div className="lib-empty">No matches.</div>}
+            {scope === 'saved' && savedList.length === 0 && <div className="lib-empty">No saved tilesets.</div>}
+            {scope === 'biomes' && biomeList.length === 0 && <div className="lib-empty">No biome presets match.</div>}
+          </>
+        ) : (
+          propList.length === 0
+            ? <div className="lib-empty">No props yet. Create them in the Assets view.</div>
+            : propList.map(a => (
+              <button key={a.id} className={`lib-card ${selectedAssetId === a.id ? 'on' : ''}`} onClick={() => onSelectAsset(a.id)}>
+                <div className="lib-thumb checker-bg"><PropThumb asset={a} /></div>
+                <div className="lib-card-foot"><span className="lib-card-name">{a.name}</span><span className="lib-tag">{a.cols}×{a.rows}</span></div>
+              </button>
+            ))
+        )}
+      </div>
+    </footer>
   )
 }

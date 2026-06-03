@@ -38,17 +38,20 @@ Everything keys off an **8-bit neighbor bitmask** with a diagonal-pruning rule: 
 
 State lives in per-area hooks; `App.jsx` holds only the cross-cutting UI state (`activeView` = `'editor' | 'level'`, `editorKind` = `'tileset' | 'prop'`, `tileSize`, `mode`, `localBiome`, `levelTool`, level zoom/sidebar state) and wires panels together. No Context, no external state lib — the tree is shallow, props are passed directly. The `assets`/`tilesets`/`levels` gallery hooks are instantiated in `App.jsx` and shared across views — e.g. `assets` feeds both the Assets editor and the Level Designer's prop placement. Loading a saved tileset/level routes through `App.jsx#applyTilesetDefinition`, which regenerates the 48 tiles.
 
-The current editor UI uses a **generator-style left sidebar**:
-- A top **Tileset / Assets** switcher lives inside the sidebar, not the header.
-- The tileset sidebar uses a **Pixel Art / Img to Pixel** mode toggle (`mode === 'draw' | 'procedural'`), stacked control cards, a wider 280px column, and CTA-heavy AI panels.
-- The assets sidebar mirrors the same visual language so both workspaces feel like one tool.
+### "Pixel Workbench" design system
+The whole UI uses a single locked **pixel** theme (ported from a standalone mockup): hard corners (`--bw: 2px`, small `--r-*`), offset block shadows (`2px 2px 0`), a 4px background grid, bundled fonts ([src/assets/fonts/](src/assets/fonts/): Albert Sans = `--ui`, JetBrains Mono = `--mono`, Silkscreen = `--pixel` for section eyebrows/brand), and a teal accent `#2fd6a6`. There is **no theme switcher** — pixel is the only direction.
+
+- **Reusable UI primitives** live in [src/components/ui/](src/components/ui/): `PixIcon` (+ `icons.js` string-grid icons), `Btn` (variants primary/accentSoft/solid/ghost/outline/danger), `Segmented`, `Section` (collapsible, pixel eyebrow), `ColorRow`. These render with inline styles bound to the CSS tokens — prefer them over hand-rolled controls.
+- **Layout** (mockup classes in [src/App.css](src/App.css)): `.topbar` (brand + `Segmented[Editor|Levels]` + `Segmented[8|16|64]`), `.editor-grid` (3 cols `286px 1fr 308px` of `.panel`s), `.library` footer (the GalleryDock), `.stage` center, `.map-scroll`/`.map-canvas` for the manual painter.
+- Each view is a **workspace component**: `Editor/EditorWorkspace.jsx` (tileset), `Assets/AssetsView.jsx` (props), `Level/LevelsWorkspace.jsx` (levels). `App.jsx` only holds state/handlers and picks the workspace.
 
 **Core (pure logic, no React):** [src/core/](src/core/)
 - `tileGenerator.js` — draw mode: clones the base `ImageData` and applies borders per bitmask → `ImageData[48]`. Borders are applied in a **single pass** (`applyBorders`) so corner pixels aren't darkened multiple times; exposed edges are always **darkened** (corners a bit more than straight edges).
 - `proceduralGen.js` — procedural mode. `generateAllBiomeTiles` paints each tile from a biome palette: primary fill + Bayer dither/patterns, then **textured borders** (`paintEdge` — irregular inner boundary + scattered border/shadow/highlight pixels, NOT a flat color bar) + inner-corner highlights. Also `generateTilesFromTextures(centerData, edgeData, tileSize, biomeColors)` — composes all 48 tiles from a **center texture + edge source** (edge = an AI/ImageData texture, e.g. snow, or null → synthesized from the border palette). It composes (never crops an AI sheet) so autotiling is always correct. Used by AI procedural generation (below).
 - `autotile.js` — level grid (`Uint8Array`, 1=solid/0=empty) → per-cell sheet index (`computeIndexMap`).
 - `levelGenerator.js` — `GENERATORS` map: caves (cellular automata), islands (value noise), platforms, rooms (dungeon), random. Seedable via mulberry32.
-- `exportSheet.js` — composites `ImageData[48]` into an 8×6 PNG and triggers download.
+- `exportSheet.js` — composites `ImageData[48]` into an 8×6 PNG (optional `scale` for 1×/2×/4×) and triggers download.
+- `composeSheet.js` — `composeNativeSheet(tiles, tileSize)` blits `ImageData[48]` into one offscreen 8×6 `<canvas>` so the level editors/minimap/tile-picker can `drawImage` individual tiles fast.
 - `aiTile.js` — OpenAI Images API call + downscale to a base **terrain tile** (opaque, see below).
 - `aiAsset.js` — OpenAI Images API call for **scenery props**: transparent background + non-square downscale (see below). Re-exports `AI_MODELS` from `aiTile.js`.
 - `exportAsset.js` — exports a prop as a transparent PNG (`exportAsset`) or all props as a grid atlas (`exportAllAssets`).
@@ -62,7 +65,14 @@ The current editor UI uses a **generator-style left sidebar**:
 - `useAssets.js` / `useTilesets.js` / `useLevels.js` — gallery hooks backed by **Supabase** (see Persistence below). Each loads its table on mount (async, with `error` state), and `add/save`/`remove` call `src/lib/db.js` then update local state. Pixel buffers / grids are base64 via `src/lib/serialize.js`. No localStorage.
 - `useBiomeGallery.js` exists but is **not currently wired** — App manages the active biome via `localBiome` directly.
 
-**Components:** [src/components/](src/components/) grouped by area — `Editor/` (PixelCanvas, ToolBar, PaletteRow, ZoomControl, TilePreviewMosaic), `Generator/` (ModeToggle, ProceduralControls, GenerateButton, AITilePanel, AIProceduralPanel), `TileSheet/` (TileSheetPreview, TileCell, ExportButton), `BiomeGallery/` (the bottom dock: **GalleryDock** — tabbed footer with a Tilesets tab (preset BiomeCards + cloud SavedTilesetCards + the "save current tileset" input) and a Props tab (saved assets, click to select), plus filter/search controls; BiomeCard, BiomeCardPreview, SavedTilesetCard), `Level/` (LevelCanvas — autotiles terrain **and draws placed props on top** with a cursor ghost, LevelControls, PropPicker — pick which saved prop to place, LevelStorage — save/load cloud levels, `zoomConfig.js` — shared zoom bounds/helpers), `Assets/` (AssetsView, AssetCanvas, AssetAIPanel, SizeSelector, AssetGallery).
+**Components:** [src/components/](src/components/) grouped by area:
+- `ui/` — shared pixel-theme primitives (PixIcon + icons, Btn, Segmented, Section, ColorRow).
+- `Editor/` — **EditorWorkspace** (the 3-col tileset view: palette `ColorRow`s, mode toggle, center canvas/preview, export), plus the canvas pieces it reuses (PixelCanvas, TilePreviewMosaic). ToolBar/PaletteRow/ZoomControl still exist but are superseded by primitives.
+- `Generator/` — AI panels reused by the editor (AITilePanel for draw, AIProceduralPanel for procedural). ModeToggle/ProceduralControls/GenerateButton are legacy/unused.
+- `TileSheet/` — TileCell, TileSheetPreview, ExportButton (legacy; the editor now renders the preview via `composeNativeSheet`).
+- `BiomeGallery/` — **GalleryDock** = the `.library` footer (Segmented `Tilesets|Props`, All/Biomes/Saved filter chips, search, save name + Save, `lib-card` rail). Palette-stripe thumbnails for tilesets, transparent thumbnails for props.
+- `Level/` — **LevelsWorkspace** (Autotile/Manual toggle). Autotile reuses **LevelCanvas** (autotiles terrain + draws placed props with a cursor ghost) + a primitives-based control panel + **Minimap**. Manual = **ManualLevelEditor** (tile-index painter with Ground/Decor layers, brush/fill/eraser/picker/rect, undo/redo, localStorage-persisted, export) using `composeNativeSheet`. `zoomConfig.js` = shared zoom bounds.
+- `Assets/` — AssetsView (re-skinned), AssetCanvas, AssetAIPanel, SizeSelector, AssetGallery.
 
 **Data layer:** [src/lib/](src/lib/) — `supabase.js` (client singleton), `db.js` (async CRUD per table), `serialize.js` (base64 codec). See Persistence below.
 

@@ -1,15 +1,28 @@
 import { useState, useEffect, useCallback } from 'react'
-import { ToolBar }       from '../Editor/ToolBar.jsx'
-import { PaletteRow }    from '../Editor/PaletteRow.jsx'
-import { AssetCanvas }   from './AssetCanvas.jsx'
-import { AssetAIPanel }  from './AssetAIPanel.jsx'
-import { SizeSelector }  from './SizeSelector.jsx'
-import { AssetGallery }  from './AssetGallery.jsx'
+import { Segmented } from '../ui/Segmented.jsx'
+import { Section } from '../ui/Section.jsx'
+import { Btn } from '../ui/Btn.jsx'
+import { ColorRow } from '../ui/ColorRow.jsx'
+import { PixIcon } from '../ui/PixIcon.jsx'
+import { ICONS } from '../ui/icons.js'
+import { AssetCanvas } from './AssetCanvas.jsx'
+import { AssetAIPanel } from './AssetAIPanel.jsx'
+import { SizeSelector } from './SizeSelector.jsx'
+import { AssetGallery } from './AssetGallery.jsx'
 import { useAssetEditor } from '../../hooks/useAssetEditor.js'
 import { exportAsset, exportAllAssets } from '../../core/exportAsset.js'
 
-// Fits the prop into roughly a 340px square edit area (min 1 so large props
-// like 64px×4 cells don't overflow the editor).
+const ATOOLS = [
+  { id: 'pencil', icon: 'brush', label: 'Pencil' },
+  { id: 'eraser', icon: 'eraser', label: 'Eraser' },
+  { id: 'fill', icon: 'bucket', label: 'Fill' },
+  { id: 'line', icon: 'rect', label: 'Line' },
+  { id: 'rect', icon: 'rect', label: 'Rect' },
+  { id: 'rectFill', icon: 'rect', label: 'RectF' },
+  { id: 'eyedropper', icon: 'picker', label: 'Pick' },
+]
+const QUICK_SWATCHES = ['#ef6f6f','#e84d4d','#e8902f','#f2c94c','#5fc96a','#3fd6a0','#3fc7d6','#4d8de8','#a06be0','#9aa0a8','#3a3f47','#f4f6f8']
+
 function fitZoom(pxW, pxH) {
   return Math.max(1, Math.min(28, Math.floor(340 / Math.max(pxW, pxH))))
 }
@@ -25,7 +38,6 @@ export function AssetsView({ tileSize, gallery, editorKind, setEditorKind }) {
   const pxH = rows * workTileSize
   const editor = useAssetEditor(pxW, pxH)
 
-  // Switching the global tile size resets the working canvas (deliberate).
   useEffect(() => {
     setWorkTileSize(tileSize)
     editor.resetCanvas(cols * tileSize, rows * tileSize)
@@ -38,114 +50,111 @@ export function AssetsView({ tileSize, gallery, editorKind, setEditorKind }) {
 
   const handleGenerated = useCallback((pixels) => {
     editor.loadPixels(pixels, pxW, pxH)
-    // Apply the current solidity so the AI result is clean by default; the
-    // slider can still re-derive softer/harder edges from the raw alpha.
     editor.applySolidify(solidThreshold, true)
   }, [editor, pxW, pxH, solidThreshold])
 
-  // Live preview while dragging; commit (records history) on release/button.
-  const handleSolidPreview = useCallback((v) => {
-    setSolidThreshold(v)
-    editor.applySolidify(v, false)
-  }, [editor])
-
-  const handleSolidCommit = useCallback(() => {
-    editor.applySolidify(solidThreshold, true)
-  }, [editor, solidThreshold])
-
+  const handleSolidPreview = useCallback((v) => { setSolidThreshold(v); editor.applySolidify(v, false) }, [editor])
+  const handleSolidCommit = useCallback(() => { editor.applySolidify(solidThreshold, true) }, [editor, solidThreshold])
   const handleSave = useCallback(() => {
     gallery.add({ name, cols, rows, tileSize: workTileSize, pixels: editor.getPixels() })
   }, [gallery, name, cols, rows, workTileSize, editor])
-
   const handleLoadToEditor = useCallback((asset) => {
-    setCols(asset.cols); setRows(asset.rows)
-    setWorkTileSize(asset.tileSize); setName(asset.name)
+    setCols(asset.cols); setRows(asset.rows); setWorkTileSize(asset.tileSize); setName(asset.name)
     editor.loadPixels(asset.pixels, asset.cols * asset.tileSize, asset.rows * asset.tileSize)
   }, [editor])
 
   const zoom = fitZoom(pxW, pxH)
 
   return (
-    <main className="app-main assets-main">
-      <aside className="sidebar">
-        <div className="editor-side-nav">
-          <button
-            className={`editor-side-tab ${editorKind === 'tileset' ? 'active' : ''}`}
-            onClick={() => setEditorKind('tileset')}
-          >
-            Tileset
-          </button>
-          <button
-            className={`editor-side-tab ${editorKind === 'prop' ? 'active' : ''}`}
-            onClick={() => setEditorKind('prop')}
-          >
-            Assets
-          </button>
+    <div className="editor-grid">
+      {/* LEFT */}
+      <aside className="panel">
+        <div className="panel-head">
+          <Segmented full value={editorKind} onChange={setEditorKind}
+            options={[{ value: 'tileset', label: 'Tileset' }, { value: 'prop', label: 'Assets' }]} />
         </div>
-        <ToolBar
-          tool={editor.tool} setTool={editor.setTool}
-          brush={editor.brush} setBrush={editor.setBrush}
-          onUndo={editor.undo} onRedo={editor.redo}
-          canUndo={editor.canUndo} canRedo={editor.canRedo}
-          onClear={editor.clear}
-          clearLabel="Clear asset"
-        />
-        <PaletteRow activeColor={editor.activeColor} setActiveColor={editor.setActiveColor} />
-        <SizeSelector cols={cols} rows={rows} tileSize={workTileSize} onChange={handleSizeChange} />
-        <AssetAIPanel pxW={pxW} pxH={pxH} onGenerated={handleGenerated} />
-      </aside>
-
-      <section className="canvas-area assets-canvas-area">
-        <div className="asset-edit-block">
-          <div className="canvas-label">Prop ({pxW}×{pxH}px · {cols}×{rows})</div>
-          <AssetCanvas
-            pixels={editor.pixels}
-            width={pxW} height={pxH}
-            zoom={zoom}
-            onStartStroke={editor.startStroke}
-            onContinueStroke={editor.continueStroke}
-            onEndStroke={editor.endStroke}
-          />
-          <div className="asset-postprocess">
-            <div className="asset-pp-label">Edge solidity</div>
-            <div className="asset-pp-row">
-              <input
-                type="range" min="1" max="255" value={solidThreshold}
-                onChange={e => handleSolidPreview(+e.target.value)}
-                onPointerUp={handleSolidCommit}
-                onKeyUp={handleSolidCommit}
-                title="Translucent pixels ≥ threshold become solid, below become transparent"
-              />
-              <span className="asset-pp-value">{solidThreshold}</span>
-              <button className="asset-pp-btn" onClick={handleSolidCommit} title="Remove translucent pixels">Solidify</button>
+        <div className="panel-scroll">
+          <Section title="Tools" icon="brush">
+            <div className="tool-grid">
+              {ATOOLS.map(t => (
+                <button key={t.id} className={`tool-btn ${editor.tool === t.id ? 'on' : ''}`} onClick={() => editor.setTool(t.id)} title={t.label}>
+                  <PixIcon grid={ICONS[t.icon]} px={2.5} color={editor.tool === t.id ? 'var(--accent-ink)' : 'var(--ink-dim)'} />
+                  <span>{t.label}</span>
+                </button>
+              ))}
             </div>
-            <div className="asset-pp-hint">Removes translucent edge pixels: ≥ threshold → solid, below → erased.</div>
-          </div>
+            <label className="field-label">Brush size</label>
+            <Segmented full size="sm" value={editor.brush} onChange={editor.setBrush}
+              options={[{ value: 1, label: '1' }, { value: 2, label: '2' }, { value: 3, label: '3' }, { value: 4, label: '4' }]} />
+            <div className="row-btns">
+              <Btn size="sm" variant="outline" icon="undo" full onClick={editor.undo} disabled={!editor.canUndo}>Undo</Btn>
+              <Btn size="sm" variant="outline" icon="redo" full onClick={editor.redo} disabled={!editor.canRedo}>Redo</Btn>
+            </div>
+          </Section>
 
-          <div className="asset-edit-actions">
-            <input
-              className="asset-name-input"
-              value={name}
-              onChange={e => setName(e.target.value)}
-              placeholder="Prop name"
+          <Section title="Color" icon="brush">
+            <ColorRow label="Active" value={editor.activeColor} onChange={editor.setActiveColor} />
+            <div className="swatch-grid">
+              {QUICK_SWATCHES.map(c => (
+                <button key={c} className={`swatch ${editor.activeColor === c ? 'active' : ''}`} style={{ background: c }} onClick={() => editor.setActiveColor(c)} />
+              ))}
+            </div>
+          </Section>
+
+          <Section title="Asset size" icon="grid">
+            <SizeSelector cols={cols} rows={rows} tileSize={workTileSize} onChange={handleSizeChange} />
+          </Section>
+
+          <Section title="AI prop" icon="spark" defaultOpen={false}>
+            <AssetAIPanel pxW={pxW} pxH={pxH} onGenerated={handleGenerated} />
+          </Section>
+        </div>
+      </aside>
+
+      {/* CENTER */}
+      <main className="stage">
+        <div className="stage-toolbar">
+          <span className="tool-active"><PixIcon grid={ICONS.brush} px={2} color="var(--accent)" /> {pxW}×{pxH}px · {cols}×{rows}</span>
+          <div className="spacer" />
+          <input className="text-input asset-name-input" value={name} onChange={e => setName(e.target.value)} placeholder="Prop name" />
+        </div>
+
+        <div className="stage-canvas">
+          <div className="asset-edit-block">
+            <AssetCanvas
+              pixels={editor.pixels} width={pxW} height={pxH} zoom={zoom}
+              onStartStroke={editor.startStroke} onContinueStroke={editor.continueStroke} onEndStroke={editor.endStroke}
             />
-            <button className="asset-clear-btn" onClick={editor.clear} title="Clear canvas">Clear</button>
-            <button className="asset-save-btn" onClick={handleSave} title="Save to gallery">Save to gallery</button>
+            <div className="asset-postprocess">
+              <div className="asset-pp-label">Edge solidity</div>
+              <div className="asset-pp-row">
+                <input type="range" min="1" max="255" value={solidThreshold}
+                  onChange={e => handleSolidPreview(+e.target.value)} onPointerUp={handleSolidCommit} onKeyUp={handleSolidCommit} />
+                <span className="asset-pp-value">{solidThreshold}</span>
+                <Btn size="sm" variant="outline" onClick={handleSolidCommit}>Solidify</Btn>
+              </div>
+              <div className="asset-pp-hint">≥ threshold → solid, below → erased.</div>
+            </div>
           </div>
         </div>
-      </section>
 
-      <aside className="preview-panel assets-gallery-panel">
-        <AssetGallery
-          assets={gallery.assets}
-          selectedId={gallery.selectedId}
-          onSelect={gallery.select}
-          onRemove={gallery.remove}
-          onExport={(a) => exportAsset(a)}
-          onExportAll={() => exportAllAssets(gallery.assets)}
-          onLoadToEditor={handleLoadToEditor}
-        />
+        <div className="stage-actions">
+          <Btn variant="danger" icon="trash" onClick={editor.clear}>Clear</Btn>
+          <Btn variant="primary" size="lg" icon="save" onClick={handleSave}>Save to gallery</Btn>
+        </div>
+      </main>
+
+      {/* RIGHT */}
+      <aside className="panel">
+        <div className="panel-scroll" style={{ padding: 0 }}>
+          <AssetGallery
+            assets={gallery.assets} selectedId={gallery.selectedId}
+            onSelect={gallery.select} onRemove={gallery.remove}
+            onExport={(a) => exportAsset(a)} onExportAll={() => exportAllAssets(gallery.assets)}
+            onLoadToEditor={handleLoadToEditor}
+          />
+        </div>
       </aside>
-    </main>
+    </div>
   )
 }
