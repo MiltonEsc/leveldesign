@@ -17,8 +17,9 @@ function assetToCanvas(asset) {
 // placed props on top. Supports two tools: 'terrain' (paint cells) and 'props'
 // (place/remove props from the gallery).
 export function LevelCanvas({
-  grid, width, height, tiles, tileSize, cellPx, setCellPx, seamlessEdges, showGrid,
+  grid, width, height, tiles, tileSize, cellPx, setCellPx, seamlessEdges, showGrid, manualTiles = null,
   onStartPaint, onContinuePaint, onEndPaint,
+  terrainTool = 'brush', terrainBrushSize = 1, onFillTerrain, onRectTerrain, onPickTerrain,
   levelTool = 'terrain', placedProps = [], assetsById = {}, selectedAssetId = null,
   onPlaceProp, onRemovePropAt,
 }) {
@@ -27,6 +28,7 @@ export function LevelCanvas({
   const painting  = useRef(false)
   const hoverCell = useRef(null)        // [x,y] under cursor (for the props ghost)
   const zoomAnchor = useRef(null)
+  const rectDrag = useRef(null)
 
   // Pre-render each tile to its own small canvas for fast drawImage blits
   const tileCanvases = useMemo(() => {
@@ -71,7 +73,8 @@ export function LevelCanvas({
     if (tileCanvases) {
       for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
-          const idx = indexMap[y * width + x]
+          const manualIdx = manualTiles ? manualTiles[y * width + x] : -1
+          const idx = manualIdx >= 0 ? manualIdx : indexMap[y * width + x]
           if (idx === 0) continue
           const tc = tileCanvases[idx]
           if (!tc) continue
@@ -89,7 +92,7 @@ export function LevelCanvas({
         p.x * tileSize, p.y * tileSize, entry.cols * tileSize, entry.rows * tileSize
       )
     }
-  }, [indexMap, tileCanvases, assetCanvases, placedProps, width, height, tileSize])
+  }, [indexMap, manualTiles, tileCanvases, assetCanvases, placedProps, width, height, tileSize])
 
   // Overlay = grid lines + props ghost under the cursor. Drawn imperatively so
   // the ghost can follow the mouse without re-rendering React.
@@ -125,7 +128,18 @@ export function LevelCanvas({
         ctx.strokeRect(hx * cellPx + 0.5, hy * cellPx + 0.5, entry.cols * cellPx - 1, entry.rows * cellPx - 1)
       }
     }
-  }, [width, height, cellPx, showGrid, levelTool, selectedAssetId, assetCanvases])
+
+    if (levelTool === 'terrain' && terrainTool === 'rect' && rectDrag.current?.cur) {
+      const { start, cur } = rectDrag.current
+      const x0 = Math.min(start[0], cur[0])
+      const y0 = Math.min(start[1], cur[1])
+      const x1 = Math.max(start[0], cur[0])
+      const y1 = Math.max(start[1], cur[1])
+      ctx.strokeStyle = 'rgba(47,214,166,0.95)'
+      ctx.lineWidth = 2
+      ctx.strokeRect(x0 * cellPx + 1, y0 * cellPx + 1, (x1 - x0 + 1) * cellPx - 2, (y1 - y0 + 1) * cellPx - 2)
+    }
+  }, [width, height, cellPx, showGrid, levelTool, selectedAssetId, assetCanvases, terrainTool])
 
   useEffect(() => { drawOverlay() }, [drawOverlay])
 
@@ -177,9 +191,22 @@ export function LevelCanvas({
       else onPlaceProp && onPlaceProp(x, y)
       return
     }
+    if (terrainTool === 'picker') {
+      onPickTerrain && onPickTerrain(x, y)
+      return
+    }
+    if (terrainTool === 'fill') {
+      onFillTerrain && onFillTerrain(x, y, e.button === 2)
+      return
+    }
+    if (terrainTool === 'rect') {
+      rectDrag.current = { start: [x, y], cur: [x, y], erase: e.button === 2 }
+      drawOverlay()
+      return
+    }
     painting.current = true
-    onStartPaint(x, y, e.button === 2)
-  }, [levelTool, cellFromEvent, onStartPaint, onPlaceProp, onRemovePropAt])
+    onStartPaint(x, y, e.button === 2, terrainBrushSize)
+  }, [levelTool, terrainTool, terrainBrushSize, cellFromEvent, onStartPaint, onPlaceProp, onRemovePropAt, onFillTerrain, onPickTerrain, drawOverlay])
 
   const handleMove = useCallback((e) => {
     const [x, y] = cellFromEvent(e)
@@ -188,17 +215,31 @@ export function LevelCanvas({
       drawOverlay()
       return
     }
+    if (terrainTool === 'rect' && rectDrag.current) {
+      rectDrag.current.cur = [x, y]
+      drawOverlay()
+      return
+    }
     if (!painting.current) return
-    onContinuePaint(x, y)
-  }, [levelTool, cellFromEvent, onContinuePaint, drawOverlay])
+    onContinuePaint(x, y, terrainBrushSize)
+  }, [levelTool, terrainTool, terrainBrushSize, cellFromEvent, onContinuePaint, drawOverlay])
 
   const handleUp = useCallback(() => {
+    if (rectDrag.current) {
+      const { start, cur, erase } = rectDrag.current
+      if (cur && onRectTerrain) {
+        onRectTerrain({ x: start[0], y: start[1] }, { x: cur[0], y: cur[1] }, erase)
+      }
+      rectDrag.current = null
+      drawOverlay()
+    }
     painting.current = false
     onEndPaint && onEndPaint()
-  }, [onEndPaint])
+  }, [onEndPaint, onRectTerrain, drawOverlay])
 
   const handleLeave = useCallback(() => {
     painting.current = false
+    rectDrag.current = null
     if (hoverCell.current) { hoverCell.current = null; drawOverlay() }
   }, [drawOverlay])
 

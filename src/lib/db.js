@@ -57,11 +57,11 @@ export async function listLevels() {
   return unwrap(await supabase.from('levels').select('*').order('created_at', { ascending: true }))
 }
 
-export async function saveLevel({ name, width, height, tileSize, gridB64, placedProps, tileset, seamlessEdges }) {
+export async function saveLevel({ name, width, height, tileSize, gridB64, manualTilesB64, placedProps, tileset, seamlessEdges }) {
   const rows = unwrap(await requireClient().from('levels')
     .insert({
       name, width, height, tile_size: tileSize, grid: gridB64,
-      placed_props: placedProps, tileset, seamless_edges: seamlessEdges,
+      manual_tiles: manualTilesB64 ?? null, placed_props: placedProps, tileset, seamless_edges: seamlessEdges,
     })
     .select())
   return rows[0]

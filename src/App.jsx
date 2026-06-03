@@ -16,6 +16,7 @@ import { BIOMES, BIOME_MAP } from './constants/biomes.js'
 import { GENERATORS }       from './core/levelGenerator.js'
 import { clampCellPx }      from './components/Level/zoomConfig.js'
 import { bytesToBase64, base64ToBytes } from './lib/serialize.js'
+import { getTileIndex } from './core/autotile.js'
 
 export default function App() {
   const [activeView, setActiveView] = useState('editor') // 'editor' | 'level'
@@ -23,6 +24,7 @@ export default function App() {
   const [tileSize, setTileSize]     = useState(16)
   const [mode, setMode]             = useState('procedural') // 'procedural' | 'draw'
   const [levelMode, setLevelMode]   = useState('autotile')   // 'autotile' | 'manual'
+  const [manualSelectedTile, setManualSelectedTile] = useState(1)
 
   const drawing   = useDrawingCanvas(tileSize)
   const tilesheet = useTilesheet()
@@ -34,6 +36,8 @@ export default function App() {
   const [cellPx, setCellPxRaw]        = useState(18)
   const [showLevelGrid, setShowLevelGrid] = useState(true)
   const [levelTool, setLevelTool]     = useState('terrain') // 'terrain' | 'props'
+  const [terrainTool, setTerrainTool] = useState('brush')
+  const [terrainBrushSize, setTerrainBrushSize] = useState(1)
   const levelCanvasAreaRef = useRef(null)
 
   const assetsById = useMemo(
@@ -205,10 +209,13 @@ export default function App() {
   }, [drawing, applyTilesetDefinition])
 
   const handleSaveLevel = useCallback((name) => {
+    const manualOut = new Uint8ClampedArray(level.manualTiles.length)
+    for (let i = 0; i < level.manualTiles.length; i++) manualOut[i] = level.manualTiles[i] + 1
     levels.save({
       name,
       width: level.width, height: level.height, tileSize,
       gridB64: bytesToBase64(level.grid),
+      manualTilesB64: bytesToBase64(manualOut),
       placedProps: level.placedProps,
       tileset: currentTilesetDefinition(),
       seamlessEdges: level.seamlessEdges,
@@ -220,10 +227,14 @@ export default function App() {
     setTileSize(size)
     drawing.resetCanvas(size)
     applyTilesetDefinition(row.tileset, size)
+    const manualTiles = row.manual_tiles
+      ? Int16Array.from(base64ToBytes(row.manual_tiles), (v) => v - 1)
+      : new Int16Array(row.width * row.height).fill(-1)
     level.loadState({
       width: row.width, height: row.height,
       grid: base64ToBytes(row.grid),
       placedProps: row.placed_props,
+      manualTiles,
     })
     level.setSeamlessEdges(!!row.seamless_edges)
   }, [drawing, applyTilesetDefinition, level])
@@ -233,6 +244,63 @@ export default function App() {
     const key = keys[Math.floor(Math.random() * keys.length)]
     level.generate(key)
   }, [level])
+
+  const handleTerrainStart = useCallback((x, y, erase, brushSize = 1) => {
+    if (levelMode === 'manual') {
+      level.paintArea(x, y, erase ? 0 : 1, brushSize)
+      level.paintManualArea(x, y, erase ? -1 : manualSelectedTile, brushSize)
+      return
+    }
+    level.paintArea(x, y, erase ? 0 : 1, brushSize)
+    level.clearManualArea(x, y, brushSize)
+  }, [level, levelMode, manualSelectedTile])
+
+  const handleTerrainContinue = useCallback((x, y, brushSize = 1) => {
+    if (levelMode === 'manual') {
+      const erase = terrainTool === 'eraser'
+      level.paintArea(x, y, erase ? 0 : 1, brushSize)
+      level.paintManualArea(x, y, erase ? -1 : manualSelectedTile, brushSize)
+      return
+    }
+    const erase = terrainTool === 'eraser'
+    level.paintArea(x, y, erase ? 0 : 1, brushSize)
+    level.clearManualArea(x, y, brushSize)
+  }, [level, levelMode, terrainTool, manualSelectedTile])
+
+  const handleTerrainFill = useCallback((x, y, erase) => {
+    if (levelMode === 'manual') {
+      level.fillAt(x, y, erase ? 0 : 1)
+      level.fillManualAt(x, y, erase ? -1 : manualSelectedTile)
+      return
+    }
+    level.fillAt(x, y, erase ? 0 : 1)
+    level.clearManualFill(x, y)
+  }, [level, levelMode, manualSelectedTile])
+
+  const handleTerrainRect = useCallback((a, b, erase) => {
+    if (levelMode === 'manual') {
+      level.fillRect(a, b, erase ? 0 : 1)
+      level.fillManualRect(a, b, erase ? -1 : manualSelectedTile)
+      return
+    }
+    level.fillRect(a, b, erase ? 0 : 1)
+    level.clearManualRect(a, b)
+  }, [level, levelMode, manualSelectedTile])
+
+  const handleTerrainPick = useCallback((x, y) => {
+    if (levelMode === 'manual') {
+      const manual = level.getManualTile(x, y)
+      if (manual >= 0) {
+        setManualSelectedTile(manual)
+        return
+      }
+      const idx = getTileIndex(level.grid, level.width, level.height, x, y, level.seamlessEdges ? 1 : 0)
+      if (idx > 0) setManualSelectedTile(idx)
+      return
+    }
+    const value = level.getCell(x, y)
+    setTerrainTool(value ? 'brush' : 'eraser')
+  }, [level, levelMode])
 
   const galleryDock = (
     <GalleryDock
@@ -301,9 +369,14 @@ export default function App() {
             showGrid={showLevelGrid} setShowGrid={setShowLevelGrid}
             onFit={handleFitLevel} levelCanvasAreaRef={levelCanvasAreaRef}
             levelTool={levelTool} setLevelTool={setLevelTool}
+            terrainTool={terrainTool} setTerrainTool={setTerrainTool}
+            terrainBrushSize={terrainBrushSize} setTerrainBrushSize={setTerrainBrushSize}
+            manualSelectedTile={manualSelectedTile} setManualSelectedTile={setManualSelectedTile}
             assets={assets.assets} assetsById={assetsById}
             selectedAssetId={assets.selectedId} onSelectAsset={assets.select}
             onPlaceProp={handlePlaceProp} onRemovePropAt={handleRemovePropAt}
+            onTerrainStart={handleTerrainStart} onTerrainContinue={handleTerrainContinue}
+            onTerrainFill={handleTerrainFill} onTerrainRect={handleTerrainRect} onTerrainPick={handleTerrainPick}
             onSurprise={handleSurprise}
             levels={levels.levels} onSaveLevel={handleSaveLevel} onLoadLevel={handleLoadLevel} onRemoveLevel={levels.remove}
           />
