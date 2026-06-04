@@ -3,10 +3,11 @@ import { createGrid } from '../core/autotile.js'
 import { GENERATORS } from '../core/levelGenerator.js'
 
 let _lid = 0
-function makeLayer(name, w, h, tileset = null) {
+function makeLayer(name, w, h, tileset = null, kind = 'autotile') {
   return {
     id: `layer-${++_lid}`,
     name,
+    kind,
     visible: true,
     tileset,
     grid: createGrid(w, h),
@@ -37,25 +38,39 @@ export function useLevelMap(initialW = 32, initialH = 20) {
   // Paint operations write here instead of calling setLayers on every mousemove.
   // A requestAnimationFrame flushes the buffer to React state (≤60fps),
   // keeping the render cycle fast regardless of mouse-move frequency.
-  const strokeBuf = useRef(null)  // { layerIdx, grid: Uint8Array, manualTiles?: Int16Array }
+  const strokeBuf = useRef(null)  // { layerIdx, grid, manualTiles?, dirtyTerrain:Set, dirtyManual:Set }
   const strokeRaf = useRef(null)
 
   const flushStroke = useCallback(() => {
     strokeRaf.current = null
     const buf = strokeBuf.current
     if (!buf) return
-    const { layerIdx, grid, manualTiles } = buf
+    const { layerIdx, grid, manualTiles, dirtyTerrain, dirtyManual } = buf
     // Commit snapshot copies to React state; buf stays mutable for ongoing stroke
     const gridSnap = new Uint8Array(grid)
     const mtSnap   = manualTiles ? new Int16Array(manualTiles) : undefined
     setLayers(prev => prev.map((l, i) =>
-      i === layerIdx ? { ...l, grid: gridSnap, ...(mtSnap ? { manualTiles: mtSnap } : {}) } : l
+      i === layerIdx ? {
+        ...l,
+        grid: gridSnap,
+        ...(mtSnap ? { manualTiles: mtSnap } : {}),
+        _dirtyTerrain: dirtyTerrain?.size ? Array.from(dirtyTerrain) : null,
+        _dirtyManual: dirtyManual?.size ? Array.from(dirtyManual) : null,
+      } : l
     ))
   }, [])
 
   const scheduleFlush = useCallback(() => {
     if (!strokeRaf.current) strokeRaf.current = requestAnimationFrame(flushStroke)
   }, [flushStroke])
+
+  const discardStrokeBuffer = useCallback(() => {
+    if (strokeRaf.current) {
+      cancelAnimationFrame(strokeRaf.current)
+      strokeRaf.current = null
+    }
+    strokeBuf.current = null
+  }, [])
 
   // Returns the mutable grid buffer for the active layer (lazy-init).
   const ensureGridBuf = useCallback((layerIdx) => {
@@ -65,6 +80,8 @@ export function useLevelMap(initialW = 32, initialH = 20) {
         layerIdx,
         grid: layer ? new Uint8Array(layer.grid) : new Uint8Array(wRef.current * hRef.current),
         manualTiles: undefined,
+        dirtyTerrain: new Set(),
+        dirtyManual: new Set(),
       }
     }
     return strokeBuf.current.grid
@@ -78,30 +95,39 @@ export function useLevelMap(initialW = 32, initialH = 20) {
 
   // ── One-shot patch (for fill/rect/generate/clear — not during drag) ────────
   const patchActive = useCallback((patchFn) => {
+    discardStrokeBuffer()
     setLayers(prev => {
       const idx = aiRef.current
       const layer = prev[idx]
       if (!layer) return prev
       const patch = patchFn(layer)
       if (!patch) return prev
-      return prev.map((l, i) => i === idx ? { ...l, ...patch } : l)
+      return prev.map((l, i) => i === idx ? {
+        ...l,
+        _dirtyTerrain: null,
+        _dirtyManual: null,
+        ...patch,
+      } : l)
     })
-  }, [])
+  }, [discardStrokeBuffer])
 
   // ── Layer CRUD ─────────────────────────────────────────────────────────────
-  const addLayer = useCallback((tileset = null) => {
+  const addLayer = useCallback((tileset = null, kind = 'autotile') => {
+    discardStrokeBuffer()
     const newIdx = lRef.current.length
     setLayers(prev => {
       const w = wRef.current, h = hRef.current
-      return [...prev, makeLayer(`Layer ${prev.length + 1}`, w, h, tileset)]
+      const label = kind === 'manual' ? 'Layer' : 'Autotile'
+      return [...prev, makeLayer(`${label} ${prev.length + 1}`, w, h, tileset, kind)]
     })
     setActiveLayerIdx(newIdx)
-  }, [])
+  }, [discardStrokeBuffer])
 
   const removeLayer = useCallback((idx) => {
+    discardStrokeBuffer()
     setLayers(prev => prev.length <= 1 ? prev : prev.filter((_, i) => i !== idx))
     setActiveLayerIdx(prev => (prev >= idx && prev > 0) ? prev - 1 : prev)
-  }, [])
+  }, [discardStrokeBuffer])
 
   const setLayerProp = useCallback((idx, props) => {
     setLayers(prev => prev.map((l, i) => i === idx ? { ...l, ...props } : l))
@@ -122,7 +148,9 @@ export function useLevelMap(initialW = 32, initialH = 20) {
         const x = cx + dx, y = cy + dy
         if (x < 0 || x >= w || y < 0 || y >= h) continue
         if (grid[y * w + x] === value) continue
-        grid[y * w + x] = value
+        const cell = y * w + x
+        grid[cell] = value
+        strokeBuf.current?.dirtyTerrain?.add(cell)
         changed = true
       }
     }
@@ -198,7 +226,9 @@ export function useLevelMap(initialW = 32, initialH = 20) {
         const x = cx + dx, y = cy + dy
         if (x < 0 || x >= w || y < 0 || y >= h) continue
         if (mt[y * w + x] === tileIndex) continue
-        mt[y * w + x] = tileIndex
+        const cell = y * w + x
+        mt[cell] = tileIndex
+        strokeBuf.current?.dirtyManual?.add(cell)
         changed = true
       }
     }
@@ -248,7 +278,18 @@ export function useLevelMap(initialW = 32, initialH = 20) {
 
   const clearManualTiles = useCallback(() => {
     const w = wRef.current, h = hRef.current
-    patchActive(() => ({ manualTiles: new Int16Array(w * h).fill(-1) }))
+    patchActive(() => ({
+      grid: createGrid(w, h),
+      manualTiles: new Int16Array(w * h).fill(-1),
+    }))
+  }, [patchActive])
+
+  const fillManualAll = useCallback((tileIndex) => {
+    const w = wRef.current, h = hRef.current
+    patchActive(() => ({
+      grid: createGrid(w, h),
+      manualTiles: new Int16Array(w * h).fill(tileIndex),
+    }))
   }, [patchActive])
 
   const getManualTile = useCallback((x, y) => {
@@ -290,6 +331,7 @@ export function useLevelMap(initialW = 32, initialH = 20) {
 
   // ── Resize (all layers) ────────────────────────────────────────────────────
   const resize = useCallback((w, h) => {
+    discardStrokeBuffer()
     const oldW = wRef.current, oldH = hRef.current
     setWidth(w); setHeight(h)
     setLayers(prev => prev.map(layer => {
@@ -304,7 +346,7 @@ export function useLevelMap(initialW = 32, initialH = 20) {
       }
       return { ...layer, grid: nextGrid, manualTiles: nextMT }
     }))
-  }, [])
+  }, [discardStrokeBuffer])
 
   // ── Props ──────────────────────────────────────────────────────────────────
   const addProp = useCallback((assetId, x, y) => {
@@ -316,11 +358,12 @@ export function useLevelMap(initialW = 32, initialH = 20) {
 
   // ── Load saved level ───────────────────────────────────────────────────────
   const loadState = useCallback(({ width: w, height: h, layers: ls, placedProps: pp }) => {
+    discardStrokeBuffer()
     setWidth(w); setHeight(h)
     setLayers(Array.isArray(ls) && ls.length > 0 ? ls : [makeLayer('Layer 1', w, h)])
     setActiveLayerIdx(0)
     setPlacedProps(Array.isArray(pp) ? pp : [])
-  }, [])
+  }, [discardStrokeBuffer])
 
   return {
     width, height,
@@ -331,7 +374,7 @@ export function useLevelMap(initialW = 32, initialH = 20) {
     generate, clear, fillAll, resize,
     getCell, paintArea, fillAt, fillRect,
     getManualTile, paintManualArea, fillManualAt, fillManualRect,
-    clearManualTiles, clearManualArea, clearManualFill, clearManualRect,
+    clearManualTiles, clearManualArea, clearManualFill, clearManualRect, fillManualAll,
     placedProps, addProp, removeProp, clearProps,
     loadState,
   }

@@ -57,3 +57,69 @@ export function computeIndexMap(grid, w, h, border = 0) {
   }
   return out
 }
+
+// Incrementally updates a previously computed index map after some grid cells
+// changed. Only the changed cells and their 8 neighbors are re-evaluated, so a
+// brush stroke costs O(changed) instead of O(w*h). Falls back to a full compute
+// when the previous map/grid are missing or the shape differs.
+// When `dirty` (array) is passed, the cell indices whose sheet index actually
+// changed are pushed onto it (useful for partial canvas redraws).
+// Returns { map, full }.
+export function patchIndexMap(prevMap, prevGrid, grid, w, h, border = 0, dirty = null) {
+  if (!prevMap || !prevGrid || prevGrid.length !== grid.length || prevMap.length !== w * h) {
+    return { map: computeIndexMap(grid, w, h, border), full: true }
+  }
+  const out = new Int16Array(prevMap)
+  const done = new Set()
+  for (let i = 0; i < grid.length; i++) {
+    if (grid[i] === prevGrid[i]) continue
+    const cx = i % w
+    const cy = (i / w) | 0
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const nx = cx + dx, ny = cy + dy
+        if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue
+        const ci = ny * w + nx
+        if (done.has(ci)) continue
+        done.add(ci)
+        const after = getTileIndex(grid, w, h, nx, ny, border)
+        if (after !== out[ci]) {
+          out[ci] = after
+          if (dirty) dirty.push(ci)
+        }
+      }
+    }
+  }
+  return { map: out, full: false }
+}
+
+// Same as patchIndexMap, but the caller provides the exact cell indices that
+// changed in the source grid. This avoids scanning the whole map to discover
+// diffs during brush strokes.
+export function patchIndexMapFromCells(prevMap, grid, changedCells, w, h, border = 0, dirty = null) {
+  if (!prevMap || prevMap.length !== w * h || !changedCells?.length) {
+    return { map: computeIndexMap(grid, w, h, border), full: true }
+  }
+  const out = new Int16Array(prevMap)
+  const done = new Set()
+  for (const cell of changedCells) {
+    const cx = cell % w
+    const cy = (cell / w) | 0
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const nx = cx + dx
+        const ny = cy + dy
+        if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue
+        const ci = ny * w + nx
+        if (done.has(ci)) continue
+        done.add(ci)
+        const after = getTileIndex(grid, w, h, nx, ny, border)
+        if (after !== out[ci]) {
+          out[ci] = after
+          if (dirty) dirty.push(ci)
+        }
+      }
+    }
+  }
+  return { map: out, full: false }
+}

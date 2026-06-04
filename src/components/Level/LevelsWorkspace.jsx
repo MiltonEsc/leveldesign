@@ -1,9 +1,8 @@
-import { useState, useMemo, useEffect, useRef } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Segmented } from '../ui/Segmented.jsx'
 import { Section } from '../ui/Section.jsx'
 import { Btn } from '../ui/Btn.jsx'
 import { LevelCanvas } from './LevelCanvas.jsx'
-import { Minimap } from './Minimap.jsx'
 import { computeIndexMap } from '../../core/autotile.js'
 import { composeNativeSheet } from '../../core/composeSheet.js'
 import { GENERATORS } from '../../core/levelGenerator.js'
@@ -17,10 +16,49 @@ const SIZE_PRESETS = [
   { label: 'XL', w: 64, h: 40 },
 ]
 
-function PropMini({ asset }) {
+const LEVEL_TOOL_OPTIONS = [
+  { value: 'terrain', label: 'Terrain' },
+  { value: 'props', label: 'Props' },
+]
+
+const TERRAIN_TOOLS = [
+  { id: 'brush', icon: 'brush', label: 'Brush' },
+  { id: 'fill', icon: 'bucket', label: 'Fill' },
+  { id: 'eraser', icon: 'eraser', label: 'Eraser' },
+  { id: 'picker', icon: 'picker', label: 'Picker' },
+  { id: 'rect', icon: 'rect', label: 'Rect' },
+]
+
+const BRUSH_SIZE_OPTIONS = [
+  { value: 1, label: '1x1' },
+  { value: 2, label: '3x3' },
+  { value: 3, label: '5x5' },
+]
+
+const propCanvasCache = new WeakMap()
+
+function getAssetCanvas(asset) {
+  if (!asset) return null
+  const cached = propCanvasCache.get(asset)
+  if (cached) return cached
+  const width = asset.cols * asset.tileSize
+  const height = asset.rows * asset.tileSize
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext('2d')
+  ctx.imageSmoothingEnabled = false
+  const pixels = asset.pixels instanceof Uint8ClampedArray ? asset.pixels : new Uint8ClampedArray(asset.pixels)
+  ctx.putImageData(new ImageData(pixels, width, height), 0, 0)
+  propCanvasCache.set(asset, canvas)
+  return canvas
+}
+
+const PropMini = memo(function PropMini({ asset }) {
   const ref = useRef(null)
   const pxW = asset.cols * asset.tileSize
   const pxH = asset.rows * asset.tileSize
+
   useEffect(() => {
     const cv = ref.current
     if (!cv) return
@@ -30,84 +68,168 @@ function PropMini({ asset }) {
     const ctx = cv.getContext('2d')
     ctx.imageSmoothingEnabled = false
     ctx.clearRect(0, 0, box, box)
+    const assetCanvas = getAssetCanvas(asset)
+    if (!assetCanvas) return
     const s = Math.min(box / pxW, box / pxH)
-    const tmp = document.createElement('canvas')
-    tmp.width = pxW
-    tmp.height = pxH
-    tmp.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(asset.pixels), pxW, pxH), 0, 0)
-    ctx.drawImage(tmp, (box - pxW * s) / 2, (box - pxH * s) / 2, pxW * s, pxH * s)
+    ctx.drawImage(assetCanvas, (box - pxW * s) / 2, (box - pxH * s) / 2, pxW * s, pxH * s)
   }, [asset, pxW, pxH])
+
   return <canvas ref={ref} />
+})
+
+function LayerRow({ layer, layerTile, tileSize, isActive, onSelect, onToggleVisible, onRename, onRemove }) {
+  const [editing, setEditing] = useState(false)
+  const [name, setName] = useState(layer.name)
+  const thumbRef = useRef(null)
+
+  useEffect(() => { setName(layer.name) }, [layer.name])
+
+  useEffect(() => {
+    const cv = thumbRef.current
+    if (!cv) return
+    const box = 28
+    cv.width = box
+    cv.height = box
+    const ctx = cv.getContext('2d')
+    ctx.imageSmoothingEnabled = false
+    ctx.clearRect(0, 0, box, box)
+    if (!layerTile?.tiles?.length) return
+    const tilePx = layerTile.tileSize || tileSize
+    const native = composeNativeSheet(layerTile.tiles, tilePx)
+    const scale = Math.min(box / native.width, box / native.height)
+    const dW = native.width * scale
+    const dH = native.height * scale
+    ctx.drawImage(native, (box - dW) / 2, (box - dH) / 2, dW, dH)
+  }, [layerTile, tileSize])
+
+  const commit = () => {
+    const next = name.trim() || layer.name
+    setEditing(false)
+    if (next !== layer.name) onRename(next)
+  }
+
+  return (
+    <div className={`sf-layer-row ${isActive ? 'active' : ''}`} onClick={onSelect}>
+      <button className={`sf-layer-eye ${layer.visible ? '' : 'off'}`} onClick={(e) => { e.stopPropagation(); onToggleVisible() }} title={layer.visible ? 'Hide layer' : 'Show layer'}>
+        <PixIcon grid={ICONS.eye} px={1.5} color={layer.visible ? 'var(--ink)' : 'var(--ink-faint)'} />
+      </button>
+      <div className="sf-layer-main">
+        {editing ? (
+          <input
+            className="text-input sf-layer-input"
+            value={name}
+            autoFocus
+            onClick={e => e.stopPropagation()}
+            onChange={e => setName(e.target.value)}
+            onBlur={commit}
+            onKeyDown={e => {
+              if (e.key === 'Enter') commit()
+              if (e.key === 'Escape') { setEditing(false); setName(layer.name) }
+            }}
+          />
+        ) : (
+          <span className="sf-layer-name">{layer.name}</span>
+        )}
+        <div className="sf-layer-meta">
+          <span className={`sf-layer-kind ${layer.kind === 'manual' ? 'manual' : 'auto'}`}>
+            {layer.kind === 'manual' ? 'Tile' : 'Autotile'}
+          </span>
+          <canvas ref={thumbRef} className="sf-layer-thumb" />
+        </div>
+      </div>
+      <button className="sf-layer-icon" onClick={(e) => { e.stopPropagation(); setEditing(true) }} title="Rename layer">
+        <PixIcon grid={ICONS.picker} px={1.5} color="var(--ink-dim)" />
+      </button>
+      <button className="sf-layer-icon" onClick={(e) => { e.stopPropagation(); onRemove() }} title="Delete layer">
+        x
+      </button>
+    </div>
+  )
 }
 
 export function LevelsWorkspace({
-  levelMode, setLevelMode, level, tiles, tileSize,
+  levelMode, level, tiles, tileSize,
   cellPx, setCellPx, showGrid, setShowGrid, onFit, levelCanvasAreaRef,
   levelTool, setLevelTool, assets, assetsById, selectedAssetId, onSelectAsset,
   terrainTool, setTerrainTool, terrainBrushSize, setTerrainBrushSize,
   manualSelectedTile, setManualSelectedTile,
   layerTiles,
   onTerrainStart, onTerrainContinue, onTerrainFill, onTerrainRect, onTerrainPick,
+  onFillActiveLayer, onClearActiveLayer,
   onPlaceProp, onRemovePropAt, onSurprise,
   levels, onSaveLevel, onLoadLevel, onRemoveLevel,
 }) {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [saveName, setSaveName] = useState('')
-
   const paletteRef = useRef(null)
-  const nativeSheetCache = useRef(new Map())
-  const indexMapCache = useRef(new Map())
+  const nativeSheetCache = useRef(new WeakMap())
+  const indexMapCache = useRef(new WeakMap())
 
-  const baseLayer = level.layers[0] || null
-  const baseLayerTile = layerTiles[0] || null
+  const activeLayer = level.layers[level.activeLayerIdx] || null
+  const activeLayerTile = layerTiles[level.activeLayerIdx] || null
 
-  const activeNative = useMemo(() => {
-    if (!baseLayerTile?.tiles?.length) return null
-    if (nativeSheetCache.current.has(baseLayerTile)) return nativeSheetCache.current.get(baseLayerTile)
-    const sheet = composeNativeSheet(baseLayerTile.tiles, baseLayerTile.tileSize || tileSize)
-    nativeSheetCache.current.set(baseLayerTile, sheet)
+  const getCachedNativeSheet = useCallback((layerTile) => {
+    if (!layerTile?.tiles?.length) return null
+    const sheetTileSize = layerTile.tileSize || tileSize
+    const cached = nativeSheetCache.current.get(layerTile)
+    if (cached?.tileSize === sheetTileSize) return cached.sheet
+    const sheet = composeNativeSheet(layerTile.tiles, sheetTileSize)
+    nativeSheetCache.current.set(layerTile, { tileSize: sheetTileSize, sheet })
     return sheet
-  }, [baseLayerTile, tileSize])
+  }, [tileSize])
 
-  const indexMap = useMemo(() => {
-    const grid = baseLayer?.grid
+  const getCachedIndexMap = useCallback((grid, width, height, seamlessEdges) => {
     if (!grid) return null
-    if (indexMapCache.current.has(grid)) return indexMapCache.current.get(grid)
-    const map = computeIndexMap(grid, level.width, level.height, level.seamlessEdges ? 1 : 0)
-    indexMapCache.current.set(grid, map)
+    const seamless = seamlessEdges ? 1 : 0
+    const cacheKey = `${width}:${height}:${seamless}`
+    let gridCache = indexMapCache.current.get(grid)
+    if (!gridCache) {
+      gridCache = new Map()
+      indexMapCache.current.set(grid, gridCache)
+    }
+    if (gridCache.has(cacheKey)) return gridCache.get(cacheKey)
+    const map = computeIndexMap(grid, width, height, seamless)
+    gridCache.set(cacheKey, map)
     return map
-  }, [baseLayer, level.width, level.height, level.seamlessEdges])
+  }, [])
 
-  const modeToggle = (
-    <Segmented
-      size="sm"
-      value={levelMode}
-      onChange={setLevelMode}
-      options={[{ value: 'autotile', label: 'Autotile' }, { value: 'manual', label: 'Manual' }]}
-    />
+  const activeNative = useMemo(
+    () => getCachedNativeSheet(activeLayerTile),
+    [activeLayerTile, getCachedNativeSheet]
   )
 
-  const exportLevelPNG = () => {
+  const gridStyle = useMemo(() => ({
+    gridTemplateColumns: sidebarOpen ? '318px minmax(0,1fr) 308px' : '0 minmax(0,1fr) 308px',
+  }), [sidebarOpen])
+
+  const leftPanelStyle = useMemo(() => ({
+    display: sidebarOpen ? 'flex' : 'none',
+  }), [sidebarOpen])
+
+  const exportLevelPNG = useCallback(() => {
     const out = document.createElement('canvas')
     out.width = level.width * tileSize
     out.height = level.height * tileSize
     const ctx = out.getContext('2d')
     ctx.imageSmoothingEnabled = false
 
-    if (baseLayer && baseLayerTile?.tiles) {
-      const ltSize = baseLayerTile.tileSize || tileSize
-      const sheet = nativeSheetCache.current.get(baseLayerTile) || (() => {
-        const s = composeNativeSheet(baseLayerTile.tiles, ltSize)
-        nativeSheetCache.current.set(baseLayerTile, s)
-        return s
-      })()
-
+    for (let li = 0; li < level.layers.length; li++) {
+      const layer = level.layers[li]
+      const layerTile = layerTiles[li]
+      if (!layer?.visible || !layerTile?.tiles) continue
+      const ltSize = layerTile.tileSize || tileSize
+      const sheet = getCachedNativeSheet(layerTile)
+      const exportIndexMap = getCachedIndexMap(layer.grid, level.width, level.height, level.seamlessEdges)
+      if (!sheet) continue
       for (let y = 0; y < level.height; y++) {
         for (let x = 0; x < level.width; x++) {
           const cell = y * level.width + x
-          const manualIdx = baseLayer.manualTiles[cell]
-          const idx = manualIdx >= 0 ? manualIdx : (indexMap?.[cell] ?? 0)
-          if (!idx) continue
+          const manualIdx = layer.manualTiles[cell]
+          const idx = layer.kind === 'manual'
+            ? manualIdx
+            : (manualIdx >= 0 ? manualIdx : (exportIndexMap?.[cell] ?? 0))
+          const isEmpty = layer.kind === 'manual' ? idx < 0 : !idx
+          if (isEmpty) continue
           const sx = (idx % 8) * ltSize
           const sy = Math.floor(idx / 8) * ltSize
           ctx.drawImage(sheet, sx, sy, ltSize, ltSize, x * tileSize, y * tileSize, tileSize, tileSize)
@@ -116,20 +238,17 @@ export function LevelsWorkspace({
     }
 
     for (const p of level.placedProps) {
-      const a = assetsById[p.assetId]
-      if (!a) continue
-      const tmp = document.createElement('canvas')
-      tmp.width = a.cols * a.tileSize
-      tmp.height = a.rows * a.tileSize
-      tmp.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(a.pixels), tmp.width, tmp.height), 0, 0)
-      ctx.drawImage(tmp, p.x * tileSize, p.y * tileSize, a.cols * tileSize, a.rows * tileSize)
+      const asset = assetsById[p.assetId]
+      const assetCanvas = getAssetCanvas(asset)
+      if (!assetCanvas) continue
+      ctx.drawImage(assetCanvas, p.x * tileSize, p.y * tileSize, asset.cols * tileSize, asset.rows * tileSize)
     }
 
     const link = document.createElement('a')
     link.href = out.toDataURL('image/png')
     link.download = `level_${level.width}x${level.height}.png`
     link.click()
-  }
+  }, [assetsById, getCachedIndexMap, getCachedNativeSheet, level, layerTiles, tileSize])
 
   useEffect(() => {
     if (levelMode !== 'manual') return
@@ -152,7 +271,7 @@ export function LevelsWorkspace({
     ctx.strokeRect(sx + 1.5, sy + 1.5, pc - 3, pc - 3)
   }, [levelMode, activeNative, manualSelectedTile])
 
-  const pickFromPalette = (e) => {
+  const pickFromPalette = useCallback((e) => {
     const cv = paletteRef.current
     if (!cv) return
     const r = cv.getBoundingClientRect()
@@ -160,16 +279,43 @@ export function LevelsWorkspace({
     const cx = Math.floor((e.clientX - r.left) / pc)
     const cy = Math.floor((e.clientY - r.top) / pc)
     if (cx >= 0 && cy >= 0 && cx < 8 && cy < 6) setManualSelectedTile(cy * 8 + cx)
-  }
+  }, [setManualSelectedTile])
 
   return (
-    <div className="editor-grid" style={{ gridTemplateColumns: sidebarOpen ? '286px minmax(0,1fr) 308px' : '0 minmax(0,1fr) 308px' }}>
-      <aside className="panel" style={{ display: sidebarOpen ? 'flex' : 'none' }}>
-        <div className="panel-head">{modeToggle}</div>
+    <div className="editor-grid" style={gridStyle}>
+      <aside className="panel" style={leftPanelStyle}>
         <div className="panel-scroll">
+          <Section title="Layers" icon="layers">
+            <div className="sf-layer-board">
+              <div className="sf-layer-list">
+                {[...level.layers].map((layer, idx) => (
+                  <LayerRow
+                    key={layer.id}
+                    layer={layer}
+                    layerTile={layerTiles[idx]}
+                    tileSize={tileSize}
+                    isActive={idx === level.activeLayerIdx}
+                    onSelect={() => level.setActiveLayerIdx(idx)}
+                    onToggleVisible={() => level.setLayerProp(idx, { visible: !layer.visible })}
+                    onRename={(name) => level.setLayerName(idx, name)}
+                    onRemove={() => level.removeLayer(idx)}
+                  />
+                )).reverse()}
+              </div>
+              <div className="sf-layer-actions">
+                <button className="sf-layer-add" onClick={() => level.addLayer(activeLayer?.tileset || null, 'manual')}>
+                  <span>+</span> Layer
+                </button>
+                <button className="sf-layer-add" onClick={() => level.addLayer(activeLayer?.tileset || null, 'autotile')}>
+                  <span>+</span> Autotile Layer
+                </button>
+              </div>
+            </div>
+            <p className="hint">Click a layer to paint on it. Manual layers use tile painting; autotile layers use terrain masks.</p>
+          </Section>
+
           <Section title="Tools" icon="brush">
-            <Segmented full size="sm" value={levelTool} onChange={setLevelTool}
-              options={[{ value: 'terrain', label: 'Terrain' }, { value: 'props', label: 'Props' }]} />
+            <Segmented full size="sm" value={levelTool} onChange={setLevelTool} options={LEVEL_TOOL_OPTIONS} />
             <p className="hint">
               {levelTool === 'terrain'
                 ? (levelMode === 'manual'
@@ -181,13 +327,7 @@ export function LevelsWorkspace({
             {levelTool === 'terrain' && (
               <>
                 <div className="tool-grid">
-                  {[
-                    { id: 'brush', icon: 'brush', label: 'Brush' },
-                    { id: 'fill', icon: 'bucket', label: 'Fill' },
-                    { id: 'eraser', icon: 'eraser', label: 'Eraser' },
-                    { id: 'picker', icon: 'picker', label: 'Picker' },
-                    { id: 'rect', icon: 'rect', label: 'Rect' },
-                  ].map(tl => (
+                  {TERRAIN_TOOLS.map(tl => (
                     <button key={tl.id} className={`tool-btn ${terrainTool === tl.id ? 'on' : ''}`}
                       onClick={() => setTerrainTool(tl.id)} title={tl.label}>
                       <PixIcon grid={ICONS[tl.icon]} px={2.5} color={terrainTool === tl.id ? 'var(--accent-ink)' : 'var(--ink-dim)'} />
@@ -196,8 +336,7 @@ export function LevelsWorkspace({
                   ))}
                 </div>
                 <label className="field-label">Brush size</label>
-                <Segmented full size="sm" value={terrainBrushSize} onChange={setTerrainBrushSize}
-                  options={[{ value: 1, label: '1x1' }, { value: 2, label: '3x3' }, { value: 3, label: '5x5' }]} />
+                <Segmented full size="sm" value={terrainBrushSize} onChange={setTerrainBrushSize} options={BRUSH_SIZE_OPTIONS} />
               </>
             )}
 
@@ -207,7 +346,7 @@ export function LevelsWorkspace({
                 <div className="palette-wrap">
                   <canvas ref={paletteRef} className="palette-canvas" onClick={pickFromPalette} />
                 </div>
-                <p className="hint">Click a tile to select it. Tile #{manualSelectedTile}.</p>
+                <p className="hint">Active layer: {activeLayer?.name || 'None'} · tile #{manualSelectedTile}.</p>
               </>
             )}
 
@@ -235,11 +374,11 @@ export function LevelsWorkspace({
 
           <Section title="Tileset" icon="image">
             <p className="hint">
-              {baseLayer?.tileset
-                ? `Current tileset: ${baseLayer.tileset.name || 'custom'} · ${baseLayer.tileset.tileSize || tileSize}px`
+              {activeLayer?.tileset
+                ? `Current tileset: ${activeLayer.tileset.name || 'custom'} · ${activeLayer.tileset.tileSize || tileSize}px`
                 : `Using the current editor tileset · ${tileSize}px`}
             </p>
-            <p className="hint">Select a biome or saved tileset from the gallery below to change the level material.</p>
+            <p className="hint">Select a biome or saved tileset from the gallery below to change the active layer material.</p>
           </Section>
 
           <Section title="Map size" icon="grid">
@@ -279,8 +418,8 @@ export function LevelsWorkspace({
           ) : (
             <Section title="Manual actions" icon="layers">
               <div className="row-btns">
-                <Btn size="sm" variant="outline" icon="grid" full onClick={level.fillAll}>Fill</Btn>
-                <Btn size="sm" variant="danger" icon="trash" full onClick={level.clear}>Clear</Btn>
+                <Btn size="sm" variant="outline" icon="grid" full onClick={onFillActiveLayer}>Fill</Btn>
+                <Btn size="sm" variant="danger" icon="trash" full onClick={onClearActiveLayer}>Clear</Btn>
               </div>
             </Section>
           )}
@@ -323,7 +462,7 @@ export function LevelsWorkspace({
           <span className="level-status-pill">Mode {levelMode}</span>
           <span className="level-status-pill">Map {level.width}x{level.height}</span>
           <span className="level-status-pill">Zoom {cellPx}px</span>
-          <span className="level-status-pill">Tileset {baseLayer?.tileset?.name || 'Editor'}</span>
+          <span className="level-status-pill">Layer {activeLayer?.name || 'None'}</span>
           <span className="level-status-pill">Props {level.placedProps.length}</span>
         </div>
         <button className="sidebar-toggle" onClick={() => setSidebarOpen(o => !o)} title={sidebarOpen ? 'Hide panel' : 'Show panel'}>
@@ -331,8 +470,8 @@ export function LevelsWorkspace({
         </button>
         {tiles ? (
           <LevelCanvas
-            layers={level.layers.slice(0, 1)}
-            layerTiles={layerTiles.slice(0, 1)}
+            layers={level.layers}
+            layerTiles={layerTiles}
             width={level.width}
             height={level.height}
             tileSize={tileSize}
@@ -362,31 +501,6 @@ export function LevelsWorkspace({
 
       <aside className="panel">
         <div className="panel-scroll">
-          <Section title="Minimap" icon="image">
-            <div className="mini-wrap">
-              <Minimap
-                width={level.width}
-                height={level.height}
-                tileSize={tileSize}
-                nativeSheet={baseLayerTile
-                  ? (nativeSheetCache.current.get(baseLayerTile) ||
-                     composeNativeSheet(baseLayerTile.tiles, baseLayerTile.tileSize || tileSize))
-                  : null}
-                getIndex={(x, y) => {
-                  const cell = y * level.width + x
-                  if (!baseLayer) return 0
-                  const manual = baseLayer.manualTiles[cell]
-                  return manual >= 0 ? manual : (indexMap?.[cell] ?? 0)
-                }}
-              />
-            </div>
-            <div className="mini-stats">
-              <div className="mini-stat"><b>{level.width * level.height}</b><span>Cells</span></div>
-              <div className="mini-stat"><b>{level.placedProps.length}</b><span>Props</span></div>
-              <div className="mini-stat"><b>{tileSize}px</b><span>Tile</span></div>
-            </div>
-          </Section>
-
           <Section title="Export" icon="download">
             <div className="export-info"><span>Output</span><b>{level.width * tileSize} x {level.height * tileSize}px</b></div>
             <Btn variant="primary" icon="download" full style={{ marginTop: 10 }} onClick={exportLevelPNG}>Export level PNG</Btn>

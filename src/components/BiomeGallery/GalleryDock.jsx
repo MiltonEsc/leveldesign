@@ -106,7 +106,19 @@ export function GalleryDock({
               </button>
             ))}
             {showSaved && savedList.map(t => (
-              <button key={t.id} className={`lib-card ${t.id === activeSavedTilesetId ? 'on' : ''}`} onClick={() => onLoadTileset(t)}>
+              <div
+                key={t.id}
+                className={`lib-card ${t.id === activeSavedTilesetId ? 'on' : ''}`}
+                role="button"
+                tabIndex={0}
+                onClick={() => onLoadTileset(t)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onLoadTileset(t)
+                  }
+                }}
+              >
                 <div className="lib-thumb">
                   <SavedTileThumb definition={t.definition} tileSize={t.tile_size} />
                 </div>
@@ -120,7 +132,7 @@ export function GalleryDock({
                     <span className="lib-tag">saved</span>
                   </div>
                 </div>
-              </button>
+              </div>
             ))}
             {showBiomes && showSaved && biomeList.length === 0 && savedList.length === 0 && <div className="lib-empty">No matches.</div>}
             {scope === 'saved' && savedList.length === 0 && <div className="lib-empty">No saved tilesets.</div>}

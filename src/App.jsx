@@ -1,3 +1,4 @@
+/* @refresh reset */
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { PixIcon }   from './components/ui/PixIcon.jsx'
 import { Segmented } from './components/ui/Segmented.jsx'
@@ -16,7 +17,6 @@ import { BIOMES, BIOME_MAP } from './constants/biomes.js'
 import { GENERATORS }       from './core/levelGenerator.js'
 import { clampCellPx }      from './components/Level/zoomConfig.js'
 import { bytesToBase64, base64ToBytes } from './lib/serialize.js'
-import { getTileIndex } from './core/autotile.js'
 import { tilesFromDefinition } from './core/tilesetDefinition.js'
 
 export default function App() {
@@ -48,17 +48,21 @@ export default function App() {
   // Layer tiles: each layer resolves to actual ImageData[48].
   // null tileset = use current editor tileset; otherwise computed from definition (cached by key).
   const layerTilesCache = useRef(new Map())
+  const editorLayerTile = useMemo(() => ({ tiles: tilesheet.tiles, tileSize }), [tilesheet.tiles, tileSize])
   const layerTiles = useMemo(() => (
     level.layers.map(layer => {
-      if (!layer.tileset) return { ...layer, tiles: tilesheet.tiles, tileSize }
+      if (!layer.tileset) return editorLayerTile
       const key = JSON.stringify({ tileSize: layer.tileset.tileSize, definition: layer.tileset.definition })
       if (!layerTilesCache.current.has(key)) {
-        layerTilesCache.current.set(key, tilesFromDefinition(layer.tileset.definition, layer.tileset.tileSize))
+        layerTilesCache.current.set(key, {
+          tiles: tilesFromDefinition(layer.tileset.definition, layer.tileset.tileSize),
+          tileSize: layer.tileset.tileSize,
+        })
       }
-      return { ...layer, tiles: layerTilesCache.current.get(key), tileSize: layer.tileset.tileSize }
+      return layerTilesCache.current.get(key)
     })
-  ), [level.layers, tilesheet.tiles, tileSize])
-  const baseLayer = level.layers[0] ?? null
+  ), [level.layers, editorLayerTile])
+  const activeLayer = level.layers[level.activeLayerIdx] ?? null
 
   const handlePlaceProp = useCallback((x, y) => {
     if (assets.selectedId == null) return
@@ -224,17 +228,22 @@ export default function App() {
   }, [drawing, applyTilesetDefinition])
 
   const handleSaveLevel = useCallback((name) => {
-    const layer = level.layers[0]
-    if (!layer) return
-    const manualOut = new Uint8ClampedArray(layer.manualTiles.length)
-    for (let i = 0; i < layer.manualTiles.length; i++) manualOut[i] = layer.manualTiles[i] + 1
+    if (!level.layers.length) return
     levels.save({
       name, width: level.width, height: level.height, tileSize,
-      layers: [{
-        id: layer.id, name: layer.name, visible: true, tileset: layer.tileset,
-        gridB64: bytesToBase64(layer.grid),
-        manualTilesB64: bytesToBase64(manualOut),
-      }],
+      layers: level.layers.map(layer => {
+        const manualOut = new Uint8ClampedArray(layer.manualTiles.length)
+        for (let i = 0; i < layer.manualTiles.length; i++) manualOut[i] = layer.manualTiles[i] + 1
+        return {
+          id: layer.id,
+          name: layer.name,
+          kind: layer.kind || 'autotile',
+          visible: layer.visible !== false,
+          tileset: layer.tileset,
+          gridB64: bytesToBase64(layer.grid),
+          manualTilesB64: bytesToBase64(manualOut),
+        }
+      }),
       placedProps: level.placedProps,
       seamlessEdges: level.seamlessEdges,
     })
@@ -244,8 +253,9 @@ export default function App() {
     const size = row.tile_size || tileSize
     let loadedLayers
     if (row.layers?.length > 0) {
-      loadedLayers = [row.layers[0]].map(l => ({
+      loadedLayers = row.layers.map(l => ({
         id: l.id, name: l.name, visible: l.visible !== false, tileset: l.tileset || null,
+        kind: l.kind || 'autotile',
         grid: new Uint8Array(base64ToBytes(l.gridB64 || '')),
         manualTiles: l.manualTilesB64
           ? Int16Array.from(base64ToBytes(l.manualTilesB64), v => v - 1)
@@ -259,6 +269,7 @@ export default function App() {
         : new Int16Array(row.width * row.height).fill(-1)
       loadedLayers = [{
         id: `layer-${Date.now()}`, name: 'Layer 1', visible: true,
+        kind: 'autotile',
         tileset: row.tileset ? { name: 'Base', tileSize: size, definition: row.tileset } : null,
         grid, manualTiles,
       }]
@@ -277,65 +288,85 @@ export default function App() {
   }, [level])
 
   const handleTerrainStart = useCallback((x, y, erase, brushSize = 1) => {
-    if (levelMode === 'manual') {
-      level.paintArea(x, y, erase ? 0 : 1, brushSize)
-      level.paintManualArea(x, y, erase ? -1 : manualSelectedTile, brushSize)
+    const shouldErase = erase || terrainTool === 'eraser'
+    const targetManual = activeLayer?.kind === 'manual'
+    if (targetManual) {
+      level.paintManualArea(x, y, shouldErase ? -1 : manualSelectedTile, brushSize)
       return
     }
-    level.paintArea(x, y, erase ? 0 : 1, brushSize)
+    level.paintArea(x, y, shouldErase ? 0 : 1, brushSize)
     level.clearManualArea(x, y, brushSize)
-  }, [level, levelMode, manualSelectedTile])
+  }, [level, activeLayer, manualSelectedTile, terrainTool])
 
   const handleTerrainContinue = useCallback((x, y, brushSize = 1) => {
-    if (levelMode === 'manual') {
+    const targetManual = activeLayer?.kind === 'manual'
+    if (targetManual) {
       const erase = terrainTool === 'eraser'
-      level.paintArea(x, y, erase ? 0 : 1, brushSize)
       level.paintManualArea(x, y, erase ? -1 : manualSelectedTile, brushSize)
       return
     }
     const erase = terrainTool === 'eraser'
     level.paintArea(x, y, erase ? 0 : 1, brushSize)
     level.clearManualArea(x, y, brushSize)
-  }, [level, levelMode, terrainTool, manualSelectedTile])
+  }, [level, activeLayer, terrainTool, manualSelectedTile])
 
   const handleTerrainFill = useCallback((x, y, erase) => {
-    if (levelMode === 'manual') {
-      level.fillAt(x, y, erase ? 0 : 1)
-      level.fillManualAt(x, y, erase ? -1 : manualSelectedTile)
+    const shouldErase = erase || terrainTool === 'eraser'
+    if (activeLayer?.kind === 'manual') {
+      level.fillManualAt(x, y, shouldErase ? -1 : manualSelectedTile)
       return
     }
-    level.fillAt(x, y, erase ? 0 : 1)
+    level.fillAt(x, y, shouldErase ? 0 : 1)
     level.clearManualFill(x, y)
-  }, [level, levelMode, manualSelectedTile])
+  }, [level, activeLayer, manualSelectedTile, terrainTool])
 
   const handleTerrainRect = useCallback((a, b, erase) => {
-    if (levelMode === 'manual') {
-      level.fillRect(a, b, erase ? 0 : 1)
-      level.fillManualRect(a, b, erase ? -1 : manualSelectedTile)
+    const shouldErase = erase || terrainTool === 'eraser'
+    if (activeLayer?.kind === 'manual') {
+      level.fillManualRect(a, b, shouldErase ? -1 : manualSelectedTile)
       return
     }
-    level.fillRect(a, b, erase ? 0 : 1)
+    level.fillRect(a, b, shouldErase ? 0 : 1)
     level.clearManualRect(a, b)
-  }, [level, levelMode, manualSelectedTile])
+  }, [level, activeLayer, manualSelectedTile, terrainTool])
 
   const handleTerrainPick = useCallback((x, y) => {
-    if (levelMode === 'manual') {
+    if (activeLayer?.kind === 'manual') {
       const manual = level.getManualTile(x, y)
       if (manual >= 0) { setManualSelectedTile(manual); return }
-      const activeLayer = level.layers[0]
-      const idx = activeLayer ? getTileIndex(activeLayer.grid, level.width, level.height, x, y, level.seamlessEdges ? 1 : 0) : 0
-      if (idx > 0) setManualSelectedTile(idx)
       return
     }
     const value = level.getCell(x, y)
     setTerrainTool(value ? 'brush' : 'eraser')
-  }, [level, levelMode])
+  }, [level, activeLayer])
+
+  const handleFillActiveLayer = useCallback(() => {
+    if (activeLayer?.kind === 'manual') {
+      level.fillManualAll(manualSelectedTile)
+      return
+    }
+    level.fillAll()
+  }, [activeLayer, level, manualSelectedTile])
+
+  const handleClearActiveLayer = useCallback(() => {
+    if (activeLayer?.kind === 'manual') {
+      level.clearManualTiles()
+      return
+    }
+    level.clear()
+  }, [activeLayer, level])
+
+  useEffect(() => {
+    if (!activeLayer) return
+    const nextMode = activeLayer.kind === 'manual' ? 'manual' : 'autotile'
+    setLevelMode(prev => prev === nextMode ? prev : nextMode)
+  }, [activeLayer?.id, activeLayer?.kind])
 
   const galleryActiveBiomeId = activeView === 'level'
-    ? (baseLayer?.tileset?.definition?.biomeId ?? null)
+    ? (activeLayer?.tileset?.definition?.biomeId ?? null)
     : localBiome.id
   const galleryActiveSavedId = activeView === 'level'
-    ? (baseLayer?.tileset?.savedId ?? null)
+    ? (activeLayer?.tileset?.savedId ?? null)
     : null
 
   const galleryDock = (
@@ -344,7 +375,7 @@ export default function App() {
       activeBiomeId={galleryActiveBiomeId}
       activeSavedTilesetId={galleryActiveSavedId}
       onSelectBiome={activeView === 'level'
-        ? (biome) => level.setLayerProp(0, {
+        ? (biome) => level.setLayerProp(level.activeLayerIdx, {
             tileset: { name: biome.label, tileSize, definition: { mode: 'procedural', biomeId: biome.id, colors: biome.colors } },
           })
         : handleSelectBiome}
@@ -352,7 +383,7 @@ export default function App() {
       defaultName={mode === 'draw' ? 'Drawn tileset' : localBiome.label}
       onSaveTileset={handleSaveTileset}
       onLoadTileset={activeView === 'level'
-        ? (row) => level.setLayerProp(0, {
+        ? (row) => level.setLayerProp(level.activeLayerIdx, {
             tileset: { name: row.name, tileSize: row.tile_size, definition: row.definition, savedId: row.id },
           })
         : handleLoadTileset}
@@ -423,6 +454,7 @@ export default function App() {
             onPlaceProp={handlePlaceProp} onRemovePropAt={handleRemovePropAt}
             onTerrainStart={handleTerrainStart} onTerrainContinue={handleTerrainContinue}
             onTerrainFill={handleTerrainFill} onTerrainRect={handleTerrainRect} onTerrainPick={handleTerrainPick}
+            onFillActiveLayer={handleFillActiveLayer} onClearActiveLayer={handleClearActiveLayer}
             onSurprise={handleSurprise}
             levels={levels.levels} onSaveLevel={handleSaveLevel} onLoadLevel={handleLoadLevel} onRemoveLevel={levels.remove}
           />
