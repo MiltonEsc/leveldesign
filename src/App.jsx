@@ -19,6 +19,51 @@ import { clampCellPx }      from './components/Level/zoomConfig.js'
 import { bytesToBase64, base64ToBytes } from './lib/serialize.js'
 import { tilesFromDefinition } from './core/tilesetDefinition.js'
 
+function inferColorsFromTiles(tiles) {
+  const counts = new Map()
+  const luminance = (r, g, b) => (r * 299 + g * 587 + b * 114) / 1000
+
+  for (const tile of tiles || []) {
+    const data = tile?.data
+    if (!data) continue
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] === 0) continue
+      const key = `${data[i]},${data[i + 1]},${data[i + 2]}`
+      counts.set(key, (counts.get(key) || 0) + 1)
+    }
+  }
+
+  const ranked = [...counts.entries()]
+    .map(([key, count]) => {
+      const [r, g, b] = key.split(',').map(Number)
+      return { hex: `#${[r, g, b].map(v => v.toString(16).padStart(2, '0')).join('')}`, count, lum: luminance(r, g, b) }
+    })
+    .sort((a, b) => b.count - a.count)
+
+  if (!ranked.length) return null
+
+  const unique = []
+  for (const color of ranked) {
+    if (!unique.find(c => c.hex === color.hex)) unique.push(color)
+    if (unique.length >= 12) break
+  }
+
+  const byLum = [...unique].sort((a, b) => a.lum - b.lum)
+  const primary = unique[0] || byLum[Math.floor(byLum.length / 2)] || null
+  const secondary = unique[1] || primary
+  const border = byLum[0] || primary
+  const highlight = byLum[byLum.length - 1] || primary
+  const shadow = byLum[Math.max(0, byLum.length - 2)] || border
+
+  return {
+    primary: primary?.hex || '#4a7c2f',
+    secondary: secondary?.hex || primary?.hex || '#3d6626',
+    border: border?.hex || '#1e3a0f',
+    highlight: highlight?.hex || primary?.hex || '#6db84a',
+    shadow: shadow?.hex || border?.hex || '#2a4a1a',
+  }
+}
+
 export default function App() {
   const [activeView, setActiveView] = useState('editor') // 'editor' | 'level'
   const [editorKind, setEditorKind] = useState('tileset') // 'tileset' | 'prop'
@@ -26,6 +71,7 @@ export default function App() {
   const [mode, setMode]             = useState('procedural') // 'procedural' | 'draw'
   const [levelMode, setLevelMode]   = useState('autotile')   // 'autotile' | 'manual'
   const [manualSelectedTile, setManualSelectedTile] = useState(1)
+  const [activeEditorSavedTilesetId, setActiveEditorSavedTilesetId] = useState(null)
 
   const drawing   = useDrawingCanvas(tileSize)
   const tilesheet = useTilesheet()
@@ -121,8 +167,13 @@ export default function App() {
   const handleGenerate = () => {
     if (mode === 'draw') {
       tilesheet.generateFromBitmap(drawing.getImageData(), tileSize)
+    } else if (aiTextures?.center) {
+      const centerData = new ImageData(new Uint8ClampedArray(aiTextures.center), tileSize, tileSize)
+      const edgeData = aiTextures.edge
+        ? new ImageData(new Uint8ClampedArray(aiTextures.edge), tileSize, tileSize)
+        : null
+      tilesheet.generateFromTextures(centerData, edgeData, tileSize, localBiome.colors)
     } else {
-      setAiTextures(null)
       tilesheet.generateFromBiome(localBiome, tileSize)
     }
   }
@@ -131,6 +182,7 @@ export default function App() {
     const fresh = { ...biome, colors: { ...biome.colors } }
     setLocalBiome(fresh)
     setAiTextures(null)
+    setActiveEditorSavedTilesetId(null)
     tilesheet.generateFromBiome(fresh, tileSize)
   }, [tileSize, tilesheet])
 
@@ -181,9 +233,11 @@ export default function App() {
       mode: 'textures',
       centerPixels: bytesToBase64(aiTextures.center),
       edgePixels: aiTextures.edge ? bytesToBase64(aiTextures.edge) : null,
+      biomeId: localBiome.id,
+      label: localBiome.label,
       colors: localBiome.colors,
     }
-    return { mode: 'procedural', biomeId: localBiome.id, colors: localBiome.colors }
+    return { mode: 'procedural', biomeId: localBiome.id, label: localBiome.label, colors: localBiome.colors }
   }, [mode, drawing.committedPixels, localBiome, aiTextures])
 
   const applyTilesetDefinition = useCallback((def, size) => {
@@ -203,17 +257,29 @@ export default function App() {
       const centerData = new ImageData(center, size, size)
       const edgeData   = edge ? new ImageData(edge, size, size) : null
       tilesheet.generateFromTextures(centerData, edgeData, size, def.colors || {})
+      if (def.colors) {
+        const base = BIOME_MAP[def.biomeId] || localBiome || BIOMES[0]
+        setLocalBiome({
+          ...base,
+          label: def.label || base.label,
+          colors: { ...base.colors, ...def.colors },
+        })
+      }
       setAiTextures({ center, edge })
       return null
     }
     setMode('procedural')
     setAiTextures(null)
-    const base = BIOME_MAP[def.biomeId] || BIOMES[0]
-    const biome = { ...base, colors: { ...base.colors, ...def.colors } }
+    const base = BIOME_MAP[def.biomeId] || localBiome || BIOMES[0]
+    const biome = {
+      ...base,
+      label: def.label || base.label,
+      colors: { ...base.colors, ...(def.colors || {}) },
+    }
     setLocalBiome(biome)
     tilesheet.generateFromBiome(biome, size)
     return null
-  }, [tilesheet])
+  }, [tilesheet, localBiome])
 
   const handleSaveTileset = useCallback((name) => {
     tilesets.save({ name, tileSize, definition: currentTilesetDefinition() })
@@ -224,6 +290,17 @@ export default function App() {
     setTileSize(size)
     drawing.resetCanvas(size)
     const bytes = applyTilesetDefinition(row.definition, size)
+    setActiveEditorSavedTilesetId(row.id)
+    const fallbackTiles = tilesFromDefinition(row.definition, size)
+    const resolvedColors = row.definition?.colors || inferColorsFromTiles(fallbackTiles)
+    if (resolvedColors) {
+      setLocalBiome(prev => ({
+        ...prev,
+        id: row.definition?.biomeId || prev.id || 'custom',
+        label: row.name || row.definition?.label || prev.label,
+        colors: { ...prev.colors, ...resolvedColors },
+      }))
+    }
     if (bytes) drawing.loadPixels(bytes)
   }, [drawing, applyTilesetDefinition])
 
@@ -364,10 +441,10 @@ export default function App() {
 
   const galleryActiveBiomeId = activeView === 'level'
     ? (activeLayer?.tileset?.definition?.biomeId ?? null)
-    : localBiome.id
+    : (activeEditorSavedTilesetId ? null : localBiome.id)
   const galleryActiveSavedId = activeView === 'level'
     ? (activeLayer?.tileset?.savedId ?? null)
-    : null
+    : activeEditorSavedTilesetId
 
   const galleryDock = (
     <GalleryDock
