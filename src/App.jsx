@@ -17,6 +17,7 @@ import { GENERATORS }       from './core/levelGenerator.js'
 import { clampCellPx }      from './components/Level/zoomConfig.js'
 import { bytesToBase64, base64ToBytes } from './lib/serialize.js'
 import { getTileIndex } from './core/autotile.js'
+import { tilesFromDefinition } from './core/tilesetDefinition.js'
 
 export default function App() {
   const [activeView, setActiveView] = useState('editor') // 'editor' | 'level'
@@ -44,6 +45,20 @@ export default function App() {
     () => Object.fromEntries(assets.assets.map(a => [a.id, a])),
     [assets.assets]
   )
+  // Layer tiles: each layer resolves to actual ImageData[48].
+  // null tileset = use current editor tileset; otherwise computed from definition (cached by key).
+  const layerTilesCache = useRef(new Map())
+  const layerTiles = useMemo(() => (
+    level.layers.map(layer => {
+      if (!layer.tileset) return { ...layer, tiles: tilesheet.tiles, tileSize }
+      const key = JSON.stringify({ tileSize: layer.tileset.tileSize, definition: layer.tileset.definition })
+      if (!layerTilesCache.current.has(key)) {
+        layerTilesCache.current.set(key, tilesFromDefinition(layer.tileset.definition, layer.tileset.tileSize))
+      }
+      return { ...layer, tiles: layerTilesCache.current.get(key), tileSize: layer.tileset.tileSize }
+    })
+  ), [level.layers, tilesheet.tiles, tileSize])
+  const baseLayer = level.layers[0] ?? null
 
   const handlePlaceProp = useCallback((x, y) => {
     if (assets.selectedId == null) return
@@ -209,40 +224,56 @@ export default function App() {
   }, [drawing, applyTilesetDefinition])
 
   const handleSaveLevel = useCallback((name) => {
-    const manualOut = new Uint8ClampedArray(level.manualTiles.length)
-    for (let i = 0; i < level.manualTiles.length; i++) manualOut[i] = level.manualTiles[i] + 1
+    const layer = level.layers[0]
+    if (!layer) return
+    const manualOut = new Uint8ClampedArray(layer.manualTiles.length)
+    for (let i = 0; i < layer.manualTiles.length; i++) manualOut[i] = layer.manualTiles[i] + 1
     levels.save({
-      name,
-      width: level.width, height: level.height, tileSize,
-      gridB64: bytesToBase64(level.grid),
-      manualTilesB64: bytesToBase64(manualOut),
+      name, width: level.width, height: level.height, tileSize,
+      layers: [{
+        id: layer.id, name: layer.name, visible: true, tileset: layer.tileset,
+        gridB64: bytesToBase64(layer.grid),
+        manualTilesB64: bytesToBase64(manualOut),
+      }],
       placedProps: level.placedProps,
-      tileset: currentTilesetDefinition(),
       seamlessEdges: level.seamlessEdges,
     })
-  }, [levels, level, tileSize, currentTilesetDefinition])
+  }, [levels, level, tileSize])
 
   const handleLoadLevel = useCallback((row) => {
-    const size = row.tile_size
+    const size = row.tile_size || tileSize
+    let loadedLayers
+    if (row.layers?.length > 0) {
+      loadedLayers = [row.layers[0]].map(l => ({
+        id: l.id, name: l.name, visible: l.visible !== false, tileset: l.tileset || null,
+        grid: new Uint8Array(base64ToBytes(l.gridB64 || '')),
+        manualTiles: l.manualTilesB64
+          ? Int16Array.from(base64ToBytes(l.manualTilesB64), v => v - 1)
+          : new Int16Array(row.width * row.height).fill(-1),
+      }))
+    } else {
+      // Legacy single-layer format
+      const grid = row.grid ? base64ToBytes(row.grid) : new Uint8Array(row.width * row.height)
+      const manualTiles = row.manual_tiles
+        ? Int16Array.from(base64ToBytes(row.manual_tiles), v => v - 1)
+        : new Int16Array(row.width * row.height).fill(-1)
+      loadedLayers = [{
+        id: `layer-${Date.now()}`, name: 'Layer 1', visible: true,
+        tileset: row.tileset ? { name: 'Base', tileSize: size, definition: row.tileset } : null,
+        grid, manualTiles,
+      }]
+    }
+    const mainDef = loadedLayers[0]?.tileset?.definition ?? row.tileset
     setTileSize(size)
     drawing.resetCanvas(size)
-    applyTilesetDefinition(row.tileset, size)
-    const manualTiles = row.manual_tiles
-      ? Int16Array.from(base64ToBytes(row.manual_tiles), (v) => v - 1)
-      : new Int16Array(row.width * row.height).fill(-1)
-    level.loadState({
-      width: row.width, height: row.height,
-      grid: base64ToBytes(row.grid),
-      placedProps: row.placed_props,
-      manualTiles,
-    })
+    if (mainDef) { const bytes = applyTilesetDefinition(mainDef, size); if (bytes) drawing.loadPixels(bytes) }
+    level.loadState({ width: row.width, height: row.height, layers: loadedLayers, placedProps: row.placed_props })
     level.setSeamlessEdges(!!row.seamless_edges)
-  }, [drawing, applyTilesetDefinition, level])
+  }, [drawing, applyTilesetDefinition, level, tileSize])
 
   const handleSurprise = useCallback(() => {
     const keys = Object.keys(GENERATORS)
-    const key = keys[Math.floor(Math.random() * keys.length)]
-    level.generate(key)
+    level.generate(keys[Math.floor(Math.random() * keys.length)])
   }, [level])
 
   const handleTerrainStart = useCallback((x, y, erase, brushSize = 1) => {
@@ -290,11 +321,9 @@ export default function App() {
   const handleTerrainPick = useCallback((x, y) => {
     if (levelMode === 'manual') {
       const manual = level.getManualTile(x, y)
-      if (manual >= 0) {
-        setManualSelectedTile(manual)
-        return
-      }
-      const idx = getTileIndex(level.grid, level.width, level.height, x, y, level.seamlessEdges ? 1 : 0)
+      if (manual >= 0) { setManualSelectedTile(manual); return }
+      const activeLayer = level.layers[0]
+      const idx = activeLayer ? getTileIndex(activeLayer.grid, level.width, level.height, x, y, level.seamlessEdges ? 1 : 0) : 0
       if (idx > 0) setManualSelectedTile(idx)
       return
     }
@@ -302,15 +331,31 @@ export default function App() {
     setTerrainTool(value ? 'brush' : 'eraser')
   }, [level, levelMode])
 
+  const galleryActiveBiomeId = activeView === 'level'
+    ? (baseLayer?.tileset?.definition?.biomeId ?? null)
+    : localBiome.id
+  const galleryActiveSavedId = activeView === 'level'
+    ? (baseLayer?.tileset?.savedId ?? null)
+    : null
+
   const galleryDock = (
     <GalleryDock
       biomes={BIOMES}
-      activeBiomeId={localBiome.id}
-      onSelectBiome={handleSelectBiome}
+      activeBiomeId={galleryActiveBiomeId}
+      activeSavedTilesetId={galleryActiveSavedId}
+      onSelectBiome={activeView === 'level'
+        ? (biome) => level.setLayerProp(0, {
+            tileset: { name: biome.label, tileSize, definition: { mode: 'procedural', biomeId: biome.id, colors: biome.colors } },
+          })
+        : handleSelectBiome}
       tilesets={tilesets.tilesets}
       defaultName={mode === 'draw' ? 'Drawn tileset' : localBiome.label}
       onSaveTileset={handleSaveTileset}
-      onLoadTileset={handleLoadTileset}
+      onLoadTileset={activeView === 'level'
+        ? (row) => level.setLayerProp(0, {
+            tileset: { name: row.name, tileSize: row.tile_size, definition: row.definition, savedId: row.id },
+          })
+        : handleLoadTileset}
       onRemoveTileset={tilesets.remove}
       assets={assets.assets}
       selectedAssetId={assets.selectedId}
@@ -372,6 +417,7 @@ export default function App() {
             terrainTool={terrainTool} setTerrainTool={setTerrainTool}
             terrainBrushSize={terrainBrushSize} setTerrainBrushSize={setTerrainBrushSize}
             manualSelectedTile={manualSelectedTile} setManualSelectedTile={setManualSelectedTile}
+            layerTiles={layerTiles}
             assets={assets.assets} assetsById={assetsById}
             selectedAssetId={assets.selectedId} onSelectAsset={assets.select}
             onPlaceProp={handlePlaceProp} onRemovePropAt={handleRemovePropAt}

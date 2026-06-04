@@ -148,6 +148,27 @@ export function useAssetEditor(initialW, initialH) {
     }
   }, [pixels, pushHistory])
 
+  const eraseAt = useCallback((x, y, src) => {
+    const { w, h } = dims.current
+    const out = new Uint8ClampedArray(src)
+    paintBrush(out, w, h, x, y, brush, ERASE_RGBA)
+    return out
+  }, [brush])
+
+  const startErase = useCallback((x, y) => {
+    const { w, h } = dims.current
+    if (x < 0 || x >= w || y < 0 || y >= h) return
+    isDrawing.current = true
+    rawRef.current = null
+    pushHistory(pixels)
+    setPixels(prev => eraseAt(x, y, prev))
+  }, [pixels, pushHistory, eraseAt])
+
+  const continueErase = useCallback((x, y) => {
+    if (!isDrawing.current) return
+    setPixels(prev => eraseAt(x, y, prev))
+  }, [eraseAt])
+
   const clear = useCallback(() => {
     const { w, h } = dims.current
     rawRef.current = null
@@ -165,6 +186,7 @@ export function useAssetEditor(initialW, initialH) {
     brush, setBrush,
     activeColor, setActiveColor,
     startStroke, continueStroke, endStroke,
+    startErase, continueErase,
     undo, redo,
     resetCanvas, loadPixels, clear, getPixels, applySolidify,
     canUndo: historyIndex > 0,

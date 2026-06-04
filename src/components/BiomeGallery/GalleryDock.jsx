@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { Segmented } from '../ui/Segmented.jsx'
 import { Btn }       from '../ui/Btn.jsx'
+import { BiomeCardPreview } from './BiomeCardPreview.jsx'
+import { tilesFromDefinition } from '../../core/tilesetDefinition.js'
 
 // Palette-stripe thumbnail for a tileset/biome (hero color + stacked rest).
 function PaletteThumb({ colors }) {
@@ -40,9 +42,19 @@ function PropThumb({ asset }) {
   return <canvas ref={ref} />
 }
 
+// Lazy tile-preview thumbnail for a saved tileset definition.
+function SavedTileThumb({ definition, tileSize }) {
+  const [tiles, setTiles] = useState(null)
+  useEffect(() => {
+    try { setTiles(tilesFromDefinition(definition, tileSize || 16)) }
+    catch { setTiles(null) }
+  }, [definition, tileSize])
+  return <BiomeCardPreview tiles={tiles} tileSize={tileSize || 16} />
+}
+
 // Bottom library drawer: Tilesets (biome presets + cloud-saved) and Props.
 export function GalleryDock({
-  biomes, activeBiomeId, onSelectBiome,
+  biomes, activeBiomeId, activeSavedTilesetId, onSelectBiome,
   tilesets, defaultName, onSaveTileset, onLoadTileset, onRemoveTileset,
   assets, selectedAssetId, onSelectAsset,
 }) {
@@ -94,14 +106,21 @@ export function GalleryDock({
               </button>
             ))}
             {showSaved && savedList.map(t => (
-              <div key={t.id} className="lib-card" onClick={() => onLoadTileset(t)}>
-                <div className="lib-thumb"><PaletteThumb colors={t.definition?.colors} /></div>
-                <div className="lib-card-foot">
-                  <span className="lib-card-name">{t.name}</span>
-                  <span className="lib-tag">saved</span>
-                  <button className="lib-card-del" title="Delete" onClick={(e) => { e.stopPropagation(); onRemoveTileset(t.id) }}>×</button>
+              <button key={t.id} className={`lib-card ${t.id === activeSavedTilesetId ? 'on' : ''}`} onClick={() => onLoadTileset(t)}>
+                <div className="lib-thumb">
+                  <SavedTileThumb definition={t.definition} tileSize={t.tile_size} />
                 </div>
-              </div>
+                <div className="lib-card-foot lib-card-foot--saved">
+                  <div className="lib-card-foot-row">
+                    <span className="lib-card-name">{t.name}</span>
+                    <button className="lib-card-del" title="Delete" onClick={(e) => { e.stopPropagation(); onRemoveTileset(t.id) }}>×</button>
+                  </div>
+                  <div className="lib-card-foot-meta">
+                    <span className="lib-card-size">{t.tile_size || 16}px</span>
+                    <span className="lib-tag">saved</span>
+                  </div>
+                </div>
+              </button>
             ))}
             {showBiomes && showSaved && biomeList.length === 0 && savedList.length === 0 && <div className="lib-empty">No matches.</div>}
             {scope === 'saved' && savedList.length === 0 && <div className="lib-empty">No saved tilesets.</div>}

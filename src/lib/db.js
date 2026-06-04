@@ -50,18 +50,21 @@ export async function removeTileset(id) {
 }
 
 // ── Levels ──────────────────────────────────────────────────────────────────
-// Row shape: { id, name, width, height, tile_size, grid(base64),
-//              placed_props(jsonb), tileset(jsonb), seamless_edges, created_at }
+// Row shape: { id, name, width, height, tile_size,
+//              layers(jsonb) — array of { id,name,visible,tileset,gridB64,manualTilesB64 },
+//              placed_props(jsonb), seamless_edges, created_at }
+// Legacy rows may also have: grid, manual_tiles, materials, material_ids, tileset
 export async function listLevels() {
   if (!supabase) return []
   return unwrap(await supabase.from('levels').select('*').order('created_at', { ascending: true }))
 }
 
-export async function saveLevel({ name, width, height, tileSize, gridB64, manualTilesB64, placedProps, tileset, seamlessEdges }) {
+export async function saveLevel({ name, width, height, tileSize, layers, placedProps, seamlessEdges }) {
   const rows = unwrap(await requireClient().from('levels')
     .insert({
-      name, width, height, tile_size: tileSize, grid: gridB64,
-      manual_tiles: manualTilesB64 ?? null, placed_props: placedProps, tileset, seamless_edges: seamlessEdges,
+      name, width, height, tile_size: tileSize,
+      layers: layers ?? null,
+      placed_props: placedProps, seamless_edges: seamlessEdges,
     })
     .select())
   return rows[0]

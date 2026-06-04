@@ -13,18 +13,24 @@ import { useAssetEditor } from '../../hooks/useAssetEditor.js'
 import { exportAsset, exportAllAssets } from '../../core/exportAsset.js'
 
 const ATOOLS = [
-  { id: 'pencil', icon: 'brush', label: 'Pencil' },
-  { id: 'eraser', icon: 'eraser', label: 'Eraser' },
-  { id: 'fill', icon: 'bucket', label: 'Fill' },
-  { id: 'line', icon: 'rect', label: 'Line' },
-  { id: 'rect', icon: 'rect', label: 'Rect' },
-  { id: 'rectFill', icon: 'rect', label: 'RectF' },
+  { id: 'pencil',     icon: 'brush',  label: 'Pencil' },
+  { id: 'eraser',     icon: 'eraser', label: 'Eraser' },
+  { id: 'fill',       icon: 'bucket', label: 'Fill' },
+  { id: 'line',       icon: 'rect',   label: 'Line' },
+  { id: 'rect',       icon: 'rect',   label: 'Rect' },
+  { id: 'rectFill',   icon: 'rect',   label: 'RectF' },
   { id: 'eyedropper', icon: 'picker', label: 'Pick' },
 ]
-const QUICK_SWATCHES = ['#ef6f6f','#e84d4d','#e8902f','#f2c94c','#5fc96a','#3fd6a0','#3fc7d6','#4d8de8','#a06be0','#9aa0a8','#3a3f47','#f4f6f8']
+const QUICK_SWATCHES = [
+  '#ef6f6f','#e84d4d','#e8902f','#f2c94c','#5fc96a','#3fd6a0',
+  '#3fc7d6','#4d8de8','#a06be0','#9aa0a8','#3a3f47','#f4f6f8',
+]
+
+const MIN_ZOOM = 1
+const MAX_ZOOM = 32
 
 function fitZoom(pxW, pxH) {
-  return Math.max(1, Math.min(28, Math.floor(340 / Math.max(pxW, pxH))))
+  return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.floor(340 / Math.max(pxW, pxH))))
 }
 
 export function AssetsView({ tileSize, gallery, editorKind, setEditorKind }) {
@@ -33,6 +39,7 @@ export function AssetsView({ tileSize, gallery, editorKind, setEditorKind }) {
   const [workTileSize, setWorkTileSize] = useState(tileSize)
   const [name, setName] = useState('prop')
   const [solidThreshold, setSolidThreshold] = useState(128)
+  const [zoom, setZoom] = useState(() => fitZoom(2 * tileSize, 2 * tileSize))
 
   const pxW = cols * workTileSize
   const pxH = rows * workTileSize
@@ -41,11 +48,13 @@ export function AssetsView({ tileSize, gallery, editorKind, setEditorKind }) {
   useEffect(() => {
     setWorkTileSize(tileSize)
     editor.resetCanvas(cols * tileSize, rows * tileSize)
+    setZoom(fitZoom(cols * tileSize, rows * tileSize))
   }, [tileSize]) // eslint-disable-line
 
   const handleSizeChange = useCallback((c, r) => {
     setCols(c); setRows(r)
     editor.resetCanvas(c * workTileSize, r * workTileSize)
+    setZoom(fitZoom(c * workTileSize, r * workTileSize))
   }, [editor, workTileSize])
 
   const handleGenerated = useCallback((pixels) => {
@@ -54,16 +63,31 @@ export function AssetsView({ tileSize, gallery, editorKind, setEditorKind }) {
   }, [editor, pxW, pxH, solidThreshold])
 
   const handleSolidPreview = useCallback((v) => { setSolidThreshold(v); editor.applySolidify(v, false) }, [editor])
-  const handleSolidCommit = useCallback(() => { editor.applySolidify(solidThreshold, true) }, [editor, solidThreshold])
+  const handleSolidCommit  = useCallback(() => { editor.applySolidify(solidThreshold, true) }, [editor, solidThreshold])
+
   const handleSave = useCallback(() => {
     gallery.add({ name, cols, rows, tileSize: workTileSize, pixels: editor.getPixels() })
   }, [gallery, name, cols, rows, workTileSize, editor])
+
   const handleLoadToEditor = useCallback((asset) => {
     setCols(asset.cols); setRows(asset.rows); setWorkTileSize(asset.tileSize); setName(asset.name)
     editor.loadPixels(asset.pixels, asset.cols * asset.tileSize, asset.rows * asset.tileSize)
+    setZoom(fitZoom(asset.cols * asset.tileSize, asset.rows * asset.tileSize))
   }, [editor])
 
-  const zoom = fitZoom(pxW, pxH)
+  const changeZoom = useCallback((delta) => {
+    setZoom(z => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z + delta)))
+  }, [])
+
+  // Keyboard shortcuts: Ctrl+Z / Ctrl+Y
+  useEffect(() => {
+    const handleKey = (e) => {
+      if (e.ctrlKey && e.key === 'z') { e.preventDefault(); editor.undo() }
+      if (e.ctrlKey && e.key === 'y') { e.preventDefault(); editor.redo() }
+    }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [editor])
 
   return (
     <div className="editor-grid">
@@ -83,9 +107,15 @@ export function AssetsView({ tileSize, gallery, editorKind, setEditorKind }) {
                 </button>
               ))}
             </div>
-            <label className="field-label">Brush size</label>
-            <Segmented full size="sm" value={editor.brush} onChange={editor.setBrush}
-              options={[{ value: 1, label: '1' }, { value: 2, label: '2' }, { value: 3, label: '3' }, { value: 4, label: '4' }]} />
+            <div className="asset-brush-row">
+              <label className="field-label" style={{ margin: 0 }}>Brush size</label>
+              <span className="asset-pp-value">{editor.brush}px</span>
+            </div>
+            <input
+              type="range" min="1" max={Math.max(8, Math.floor(Math.max(pxW, pxH) / 4))}
+              value={editor.brush} onChange={e => editor.setBrush(+e.target.value)}
+              style={{ width: '100%', accentColor: 'var(--accent)' }}
+            />
             <div className="row-btns">
               <Btn size="sm" variant="outline" icon="undo" full onClick={editor.undo} disabled={!editor.canUndo}>Undo</Btn>
               <Btn size="sm" variant="outline" icon="redo" full onClick={editor.redo} disabled={!editor.canRedo}>Redo</Btn>
@@ -96,7 +126,8 @@ export function AssetsView({ tileSize, gallery, editorKind, setEditorKind }) {
             <ColorRow label="Active" value={editor.activeColor} onChange={editor.setActiveColor} />
             <div className="swatch-grid">
               {QUICK_SWATCHES.map(c => (
-                <button key={c} className={`swatch ${editor.activeColor === c ? 'active' : ''}`} style={{ background: c }} onClick={() => editor.setActiveColor(c)} />
+                <button key={c} className={`swatch ${editor.activeColor === c ? 'active' : ''}`}
+                  style={{ background: c }} onClick={() => editor.setActiveColor(c)} />
               ))}
             </div>
           </Section>
@@ -105,7 +136,7 @@ export function AssetsView({ tileSize, gallery, editorKind, setEditorKind }) {
             <SizeSelector cols={cols} rows={rows} tileSize={workTileSize} onChange={handleSizeChange} />
           </Section>
 
-          <Section title="AI prop" icon="spark" defaultOpen={false}>
+          <Section title="Generate with AI" icon="spark">
             <AssetAIPanel pxW={pxW} pxH={pxH} onGenerated={handleGenerated} />
           </Section>
         </div>
@@ -114,26 +145,40 @@ export function AssetsView({ tileSize, gallery, editorKind, setEditorKind }) {
       {/* CENTER */}
       <main className="stage">
         <div className="stage-toolbar">
-          <span className="tool-active"><PixIcon grid={ICONS.brush} px={2} color="var(--accent)" /> {pxW}×{pxH}px · {cols}×{rows}</span>
+          <span className="tool-active">
+            <PixIcon grid={ICONS.brush} px={2} color="var(--accent)" /> {pxW}×{pxH}px · {cols}×{rows}
+          </span>
           <div className="spacer" />
+          <div className="zoom-ctrl">
+            <button onClick={() => changeZoom(-1)} disabled={zoom <= MIN_ZOOM} title="Zoom out">−</button>
+            <span>{zoom}x</span>
+            <button onClick={() => changeZoom(1)} disabled={zoom >= MAX_ZOOM} title="Zoom in">+</button>
+            <button onClick={() => setZoom(fitZoom(pxW, pxH))} title="Fit to stage" style={{ fontSize: 10, padding: '0 6px' }}>Fit</button>
+          </div>
           <input className="text-input asset-name-input" value={name} onChange={e => setName(e.target.value)} placeholder="Prop name" />
         </div>
 
-        <div className="stage-canvas">
-          <div className="asset-edit-block">
+        <div className="stage-canvas" style={{ overflow: 'auto', alignItems: 'flex-start' }}>
+          <div className="asset-edit-block" style={{ margin: 'auto', paddingBottom: 16 }}>
             <AssetCanvas
               pixels={editor.pixels} width={pxW} height={pxH} zoom={zoom}
-              onStartStroke={editor.startStroke} onContinueStroke={editor.continueStroke} onEndStroke={editor.endStroke}
+              onStartStroke={editor.startStroke}
+              onContinueStroke={editor.continueStroke}
+              onEndStroke={editor.endStroke}
+              onStartErase={editor.startErase}
+              onContinueErase={editor.continueErase}
+              onZoomChange={changeZoom}
             />
             <div className="asset-postprocess">
               <div className="asset-pp-label">Edge solidity</div>
               <div className="asset-pp-row">
                 <input type="range" min="1" max="255" value={solidThreshold}
-                  onChange={e => handleSolidPreview(+e.target.value)} onPointerUp={handleSolidCommit} onKeyUp={handleSolidCommit} />
+                  onChange={e => handleSolidPreview(+e.target.value)}
+                  onPointerUp={handleSolidCommit} onKeyUp={handleSolidCommit} />
                 <span className="asset-pp-value">{solidThreshold}</span>
                 <Btn size="sm" variant="outline" onClick={handleSolidCommit}>Solidify</Btn>
               </div>
-              <div className="asset-pp-hint">≥ threshold → solid, below → erased.</div>
+              <div className="asset-pp-hint">Slide to adjust edge transparency. Right-click on canvas to erase.</div>
             </div>
           </div>
         </div>

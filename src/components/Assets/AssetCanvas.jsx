@@ -1,10 +1,16 @@
 import { useRef, useEffect, useCallback } from 'react'
 
 // Pixel editor canvas for non-square props. A CSS checkerboard sits behind the
-// drawing canvas so transparent pixels are visible.
-export function AssetCanvas({ pixels, width, height, zoom, onStartStroke, onContinueStroke, onEndStroke }) {
+// drawing canvas so transparent pixels are visible. Right-click always erases.
+export function AssetCanvas({
+  pixels, width, height, zoom,
+  onStartStroke, onContinueStroke, onEndStroke,
+  onStartErase, onContinueErase,
+  onZoomChange,
+}) {
   const canvasRef = useRef(null)
   const gridRef   = useRef(null)
+  const erasingRef = useRef(false)
 
   // Render pixels
   useEffect(() => {
@@ -26,13 +32,15 @@ export function AssetCanvas({ pixels, width, height, zoom, onStartStroke, onCont
     canvas.width  = dW
     canvas.height = dH
     ctx.clearRect(0, 0, dW, dH)
-    ctx.strokeStyle = 'rgba(255,255,255,0.12)'
-    ctx.lineWidth = 0.5
-    for (let x = 0; x <= width; x++) {
-      ctx.beginPath(); ctx.moveTo(x * zoom, 0); ctx.lineTo(x * zoom, dH); ctx.stroke()
-    }
-    for (let y = 0; y <= height; y++) {
-      ctx.beginPath(); ctx.moveTo(0, y * zoom); ctx.lineTo(dW, y * zoom); ctx.stroke()
+    if (zoom >= 4) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.10)'
+      ctx.lineWidth = 0.5
+      for (let x = 0; x <= width; x++) {
+        ctx.beginPath(); ctx.moveTo(x * zoom, 0); ctx.lineTo(x * zoom, dH); ctx.stroke()
+      }
+      for (let y = 0; y <= height; y++) {
+        ctx.beginPath(); ctx.moveTo(0, y * zoom); ctx.lineTo(dW, y * zoom); ctx.stroke()
+      }
     }
   }, [width, height, zoom])
 
@@ -46,22 +54,44 @@ export function AssetCanvas({ pixels, width, height, zoom, onStartStroke, onCont
   const handleMouseDown = useCallback((e) => {
     e.preventDefault()
     const [x, y] = getPixelCoords(e)
-    onStartStroke(x, y)
-  }, [getPixelCoords, onStartStroke])
+    if (e.button === 2) {
+      erasingRef.current = true
+      onStartErase?.(x, y)
+    } else {
+      erasingRef.current = false
+      onStartStroke(x, y)
+    }
+  }, [getPixelCoords, onStartStroke, onStartErase])
 
   const handleMouseMove = useCallback((e) => {
-    if (e.buttons !== 1) return
+    if (e.buttons === 0) return
     const [x, y] = getPixelCoords(e)
-    onContinueStroke(x, y)
-  }, [getPixelCoords, onContinueStroke])
+    if (erasingRef.current) {
+      onContinueErase?.(x, y)
+    } else if (e.buttons === 1) {
+      onContinueStroke(x, y)
+    }
+  }, [getPixelCoords, onContinueStroke, onContinueErase])
 
-  const handleMouseUp = useCallback(() => { onEndStroke() }, [onEndStroke])
+  const handleMouseUp = useCallback(() => {
+    erasingRef.current = false
+    onEndStroke()
+  }, [onEndStroke])
+
+  const handleWheel = useCallback((e) => {
+    e.preventDefault()
+    onZoomChange?.(e.deltaY < 0 ? 1 : -1)
+  }, [onZoomChange])
 
   const dW = width * zoom
   const dH = height * zoom
 
   return (
-    <div className="asset-canvas-wrapper checker-bg" style={{ position: 'relative', width: dW, height: dH }}>
+    <div
+      className="asset-canvas-wrapper checker-bg"
+      style={{ position: 'relative', width: dW, height: dH }}
+      onContextMenu={e => e.preventDefault()}
+    >
       <canvas
         ref={canvasRef}
         width={width}
@@ -71,6 +101,7 @@ export function AssetCanvas({ pixels, width, height, zoom, onStartStroke, onCont
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
+        onWheel={handleWheel}
       />
       <canvas
         ref={gridRef}
