@@ -14,7 +14,7 @@ export function TileCell({ tile, index, tileSize }) {
   const category = INDEX_TO_CATEGORY[index]
 
   // Cells fill an equal fraction of the grid width (set by the panel), so the
-  // 48-tile sheet always fits regardless of native tile size (8/16/64).
+  // 48-tile sheet always fits regardless of native tile size (8/16/32/64).
   return (
     <div
       className="tile-cell"

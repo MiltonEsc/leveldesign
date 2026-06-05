@@ -13,6 +13,7 @@ import { useAssetEditor } from '../../hooks/useAssetEditor.js'
 import { exportAsset, exportAllAssets } from '../../core/exportAsset.js'
 
 const ATOOLS = [
+  { id: 'move',       icon: 'move',   label: 'Move' },
   { id: 'pencil',     icon: 'brush',  label: 'Pencil' },
   { id: 'eraser',     icon: 'eraser', label: 'Eraser' },
   { id: 'fill',       icon: 'bucket', label: 'Fill' },
@@ -162,6 +163,7 @@ export function AssetsView({ tileSize, gallery, editorKind, setEditorKind }) {
           <div className="asset-edit-block" style={{ margin: 'auto', paddingBottom: 16 }}>
             <AssetCanvas
               pixels={editor.pixels} width={pxW} height={pxH} zoom={zoom}
+              tool={editor.tool}
               onStartStroke={editor.startStroke}
               onContinueStroke={editor.continueStroke}
               onEndStroke={editor.endStroke}

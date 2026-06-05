@@ -487,7 +487,7 @@ export default function App() {
         <div className="topgroup">
           <span className="group-label">GRID</span>
           <Segmented size="sm" value={tileSize} onChange={handleTileSizeChange}
-            options={[{ value: 8, label: '8' }, { value: 16, label: '16' }, { value: 64, label: '64' }]} />
+            options={[{ value: 8, label: '8' }, { value: 16, label: '16' }, { value: 32, label: '32' }, { value: 64, label: '64' }]} />
         </div>
       </header>
 

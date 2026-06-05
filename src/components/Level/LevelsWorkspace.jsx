@@ -77,7 +77,11 @@ const PropMini = memo(function PropMini({ asset }) {
   return <canvas ref={ref} />
 })
 
-function LayerRow({ layer, layerTile, tileSize, isActive, onSelect, onToggleVisible, onRename, onRemove }) {
+function LayerRow({
+  layer, layerTile, tileSize, isActive,
+  canMoveUp, canMoveDown,
+  onSelect, onToggleVisible, onMoveUp, onMoveDown, onRename, onRemove,
+}) {
   const [editing, setEditing] = useState(false)
   const [name, setName] = useState(layer.name)
   const thumbRef = useRef(null)
@@ -113,6 +117,24 @@ function LayerRow({ layer, layerTile, tileSize, isActive, onSelect, onToggleVisi
       <button className={`sf-layer-eye ${layer.visible ? '' : 'off'}`} onClick={(e) => { e.stopPropagation(); onToggleVisible() }} title={layer.visible ? 'Hide layer' : 'Show layer'}>
         <PixIcon grid={ICONS.eye} px={1.5} color={layer.visible ? 'var(--ink)' : 'var(--ink-faint)'} />
       </button>
+      <div className="sf-layer-order">
+        <button
+          className="sf-layer-order-btn"
+          onClick={(e) => { e.stopPropagation(); onMoveUp() }}
+          disabled={!canMoveUp}
+          title="Move layer up"
+        >
+          <PixIcon grid={ICONS.arrowUp} px={1} color="currentColor" />
+        </button>
+        <button
+          className="sf-layer-order-btn"
+          onClick={(e) => { e.stopPropagation(); onMoveDown() }}
+          disabled={!canMoveDown}
+          title="Move layer down"
+        >
+          <PixIcon grid={ICONS.arrowDown} px={1} color="currentColor" />
+        </button>
+      </div>
       <div className="sf-layer-main">
         {editing ? (
           <input
@@ -288,15 +310,19 @@ export function LevelsWorkspace({
           <Section title="Layers" icon="layers">
             <div className="sf-layer-board">
               <div className="sf-layer-list">
-                {[...level.layers].map((layer, idx) => (
+                {level.layers.map((layer, idx) => (
                   <LayerRow
                     key={layer.id}
                     layer={layer}
                     layerTile={layerTiles[idx]}
                     tileSize={tileSize}
                     isActive={idx === level.activeLayerIdx}
+                    canMoveUp={idx < level.layers.length - 1}
+                    canMoveDown={idx > 0}
                     onSelect={() => level.setActiveLayerIdx(idx)}
                     onToggleVisible={() => level.setLayerProp(idx, { visible: !layer.visible })}
+                    onMoveUp={() => level.moveLayer(idx, 1)}
+                    onMoveDown={() => level.moveLayer(idx, -1)}
                     onRename={(name) => level.setLayerName(idx, name)}
                     onRemove={() => level.removeLayer(idx)}
                   />

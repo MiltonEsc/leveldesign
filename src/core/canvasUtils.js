@@ -103,6 +103,26 @@ export function paintBrush(data, width, height, x, y, brush, rgba) {
   }
 }
 
+// Moves the whole pixel buffer by dx/dy, clipping anything outside the canvas.
+export function translatePixels(data, width, height, dx, dy) {
+  const out = new Uint8ClampedArray(width * height * 4)
+  for (let y = 0; y < height; y++) {
+    const ty = y + dy
+    if (ty < 0 || ty >= height) continue
+    for (let x = 0; x < width; x++) {
+      const tx = x + dx
+      if (tx < 0 || tx >= width) continue
+      const src = getPixelIdx(x, y, width)
+      const dst = getPixelIdx(tx, ty, width)
+      out[dst] = data[src]
+      out[dst + 1] = data[src + 1]
+      out[dst + 2] = data[src + 2]
+      out[dst + 3] = data[src + 3]
+    }
+  }
+  return out
+}
+
 // Bresenham line, painting a brush at each step
 export function drawLineInto(data, width, height, x0, y0, x1, y1, brush, rgba) {
   let dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0)

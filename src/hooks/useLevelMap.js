@@ -129,6 +129,23 @@ export function useLevelMap(initialW = 32, initialH = 20) {
     setActiveLayerIdx(prev => (prev >= idx && prev > 0) ? prev - 1 : prev)
   }, [discardStrokeBuffer])
 
+  const moveLayer = useCallback((idx, direction) => {
+    const nextIdx = idx + direction
+    if (nextIdx < 0 || nextIdx >= lRef.current.length) return
+    discardStrokeBuffer()
+    setLayers(prev => {
+      if (idx < 0 || idx >= prev.length || nextIdx < 0 || nextIdx >= prev.length) return prev
+      const next = [...prev]
+      ;[next[idx], next[nextIdx]] = [next[nextIdx], next[idx]]
+      return next
+    })
+    setActiveLayerIdx(prev => {
+      if (prev === idx) return nextIdx
+      if (prev === nextIdx) return idx
+      return prev
+    })
+  }, [discardStrokeBuffer])
+
   const setLayerProp = useCallback((idx, props) => {
     setLayers(prev => prev.map((l, i) => i === idx ? { ...l, ...props } : l))
   }, [])
@@ -368,7 +385,7 @@ export function useLevelMap(initialW = 32, initialH = 20) {
   return {
     width, height,
     layers, activeLayerIdx, setActiveLayerIdx,
-    addLayer, removeLayer, setLayerProp, setLayerName,
+    addLayer, removeLayer, moveLayer, setLayerProp, setLayerName,
     seamlessEdges, setSeamlessEdges,
     startPaint, continuePaint, endStroke,
     generate, clear, fillAll, resize,

@@ -3,7 +3,7 @@ import { useRef, useEffect, useCallback } from 'react'
 // Pixel editor canvas for non-square props. A CSS checkerboard sits behind the
 // drawing canvas so transparent pixels are visible. Right-click always erases.
 export function AssetCanvas({
-  pixels, width, height, zoom,
+  pixels, width, height, zoom, tool,
   onStartStroke, onContinueStroke, onEndStroke,
   onStartErase, onContinueErase,
   onZoomChange,
@@ -85,6 +85,7 @@ export function AssetCanvas({
 
   const dW = width * zoom
   const dH = height * zoom
+  const cursor = tool === 'move' ? 'move' : 'crosshair'
 
   return (
     <div
@@ -96,7 +97,7 @@ export function AssetCanvas({
         ref={canvasRef}
         width={width}
         height={height}
-        style={{ width: dW, height: dH, imageRendering: 'pixelated', cursor: 'crosshair', display: 'block' }}
+        style={{ width: dW, height: dH, imageRendering: 'pixelated', cursor, display: 'block' }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}

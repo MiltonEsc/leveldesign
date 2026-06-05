@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef } from 'react'
 import {
   hexToRGBA, rgbaToHex, floodFill,
-  paintBrush, drawLineInto, drawRectInto, getPixelRGBA, solidifyAlpha,
+  paintBrush, translatePixels, drawLineInto, drawRectInto, getPixelRGBA, solidifyAlpha,
 } from '../core/canvasUtils.js'
 
 const MAX_HISTORY = 60
@@ -10,6 +10,7 @@ const ERASE_RGBA = [0, 0, 0, 0]
 
 // Tools that drag out a shape and only commit on mouse-up (with live preview)
 const SHAPE_TOOLS = new Set(['line', 'rect', 'rectFill'])
+const MOVE_TOOL = 'move'
 
 // Pixel editor for non-square, transparent prop canvases (width × height).
 export function useAssetEditor(initialW, initialH) {
@@ -85,7 +86,11 @@ export function useAssetEditor(initialW, initialH) {
     rawRef.current = null // manual edit → slider should act on current pixels
     pushHistory(pixels)
 
-    if (SHAPE_TOOLS.has(tool)) {
+    if (tool === MOVE_TOOL) {
+      strokeStart.current = [x, y]
+      baseSnapshot.current = pixels
+      setPreview(new Uint8ClampedArray(pixels))
+    } else if (SHAPE_TOOLS.has(tool)) {
       strokeStart.current = [x, y]
       baseSnapshot.current = pixels
       setPreview(new Uint8ClampedArray(pixels))
@@ -98,7 +103,10 @@ export function useAssetEditor(initialW, initialH) {
     if (!isDrawing.current) return
     const { w, h } = dims.current
 
-    if (SHAPE_TOOLS.has(tool)) {
+    if (tool === MOVE_TOOL) {
+      const [sx, sy] = strokeStart.current
+      setPreview(translatePixels(baseSnapshot.current, w, h, x - sx, y - sy))
+    } else if (SHAPE_TOOLS.has(tool)) {
       const [sx, sy] = strokeStart.current
       const out = new Uint8ClampedArray(baseSnapshot.current)
       const rgba = hexToRGBA(activeColor)
@@ -116,7 +124,7 @@ export function useAssetEditor(initialW, initialH) {
   const endStroke = useCallback(() => {
     if (!isDrawing.current) return
     isDrawing.current = false
-    if (SHAPE_TOOLS.has(tool) && preview) {
+    if ((SHAPE_TOOLS.has(tool) || tool === MOVE_TOOL) && preview) {
       setPixels(preview)
       setPreview(null)
     }
