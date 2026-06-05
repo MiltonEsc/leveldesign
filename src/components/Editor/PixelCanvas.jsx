@@ -1,8 +1,9 @@
 import { useRef, useEffect, useCallback } from 'react'
 
-export function PixelCanvas({ pixels, tileSize, zoom, onStartStroke, onContinueStroke, onEndStroke }) {
+export function PixelCanvas({ pixels, tileSize, zoom, onStartStroke, onContinueStroke, onEndStroke, onZoomChange }) {
   const canvasRef  = useRef(null)
   const gridRef    = useRef(null)
+  const wrapperRef = useRef(null)
 
   // Render pixels to canvas whenever they change
   useEffect(() => {
@@ -61,10 +62,25 @@ export function PixelCanvas({ pixels, tileSize, zoom, onStartStroke, onContinueS
     onEndStroke()
   }, [onEndStroke])
 
+  // Wheel zoom — attached as a non-passive native listener so preventDefault
+  // works (React registers onWheel as passive, which would ignore it and warn).
+  const handleWheel = useCallback((e) => {
+    if (!onZoomChange) return
+    e.preventDefault()
+    onZoomChange(e.deltaY < 0 ? 1 : -1)
+  }, [onZoomChange])
+
+  useEffect(() => {
+    const el = wrapperRef.current
+    if (!el) return
+    el.addEventListener('wheel', handleWheel, { passive: false })
+    return () => el.removeEventListener('wheel', handleWheel)
+  }, [handleWheel])
+
   const displaySize = tileSize * zoom
 
   return (
-    <div className="pixel-canvas-wrapper" style={{ position: 'relative', width: displaySize, height: displaySize }}>
+    <div ref={wrapperRef} className="pixel-canvas-wrapper" style={{ position: 'relative', width: displaySize, height: displaySize }}>
       <canvas
         ref={canvasRef}
         width={tileSize}

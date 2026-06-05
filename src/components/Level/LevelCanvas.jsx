@@ -407,6 +407,17 @@ export function LevelCanvas({
     setCellPx(newCell)
   }, [cellPx, setCellPx])
 
+  // React registers `onWheel` as a passive listener at the root, so calling
+  // preventDefault() there is ignored (and floods the console with warnings)
+  // while the container still scrolls during zoom. Attach a non-passive native
+  // wheel listener directly to the wrapper so preventDefault actually works.
+  useEffect(() => {
+    const el = wrapperRef.current
+    if (!el) return
+    el.addEventListener('wheel', handleWheel, { passive: false })
+    return () => el.removeEventListener('wheel', handleWheel)
+  }, [handleWheel])
+
   const handleDown = useCallback((e) => {
     e.preventDefault()
     const [x, y] = cellFromEvent(e)
@@ -479,7 +490,6 @@ export function LevelCanvas({
       ref={wrapperRef}
       className="level-canvas-wrapper"
       style={{ position: 'relative', width: displayW, height: displayH, cursor }}
-      onWheel={handleWheel}
       onMouseDown={handleDown}
       onMouseMove={handleMove}
       onMouseUp={handleUp}

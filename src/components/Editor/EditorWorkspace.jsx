@@ -1,34 +1,69 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { Segmented } from '../ui/Segmented.jsx'
-import { Section }   from '../ui/Section.jsx'
-import { Btn }       from '../ui/Btn.jsx'
-import { ColorRow }  from '../ui/ColorRow.jsx'
-import { PixelCanvas }       from './PixelCanvas.jsx'
+import { Section } from '../ui/Section.jsx'
+import { Btn } from '../ui/Btn.jsx'
+import { ColorRow } from '../ui/ColorRow.jsx'
+import { PixelCanvas } from './PixelCanvas.jsx'
 import { TilePreviewMosaic } from './TilePreviewMosaic.jsx'
-import { AITilePanel }       from '../Generator/AITilePanel.jsx'
+import { AITilePanel } from '../Generator/AITilePanel.jsx'
 import { AIProceduralPanel } from '../Generator/AIProceduralPanel.jsx'
 import { composeNativeSheet } from '../../core/composeSheet.js'
-import { exportTilesheet }   from '../../core/exportSheet.js'
+import { exportTilesheet } from '../../core/exportSheet.js'
 
 const PAL_KEYS = [
-  ['primary', 'Primary'], ['secondary', 'Secondary'], ['border', 'Border'],
-  ['highlight', 'Highlight'], ['shadow', 'Shadow'],
+  ['primary', 'Primary'],
+  ['secondary', 'Secondary'],
+  ['border', 'Border'],
+  ['highlight', 'Highlight'],
+  ['shadow', 'Shadow'],
 ]
-const QUICK_SWATCHES = ['#ef6f6f','#e84d4d','#e8902f','#f2c94c','#5fc96a','#3fd6a0','#3fc7d6','#4d8de8','#a06be0','#9aa0a8','#3a3f47','#f4f6f8']
 
-// Renders a composed tileset (ImageData[48]) into a canvas at a given scale.
-function SheetCanvas({ tiles, tileSize, scale, className }) {
+const QUICK_SWATCHES = ['#ef6f6f', '#e84d4d', '#e8902f', '#f2c94c', '#5fc96a', '#3fd6a0', '#3fc7d6', '#4d8de8', '#a06be0', '#9aa0a8', '#3a3f47', '#f4f6f8']
+
+// Zoom bounds — shared by the Manual draw canvas and the Procedural sheet
+// (wheel + −/+/Fit), matching the Assets view.
+const MIN_ZOOM = 1
+const MAX_ZOOM = 32
+// Fit a single tile (draw canvas) vs. the full 8×6 sheet (procedural) to the stage.
+const fitTileZoom  = (size) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.floor(360 / size)))
+const fitSheetZoom = (size) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM,
+  Math.floor(Math.min(540 / (8 * size), 430 / (6 * size)))))
+
+function SheetCanvas({ tiles, tileSize, scale, className, onZoomChange }) {
   const ref = useRef(null)
+  const nativeRef = useRef(null)
+
+  // Compose the native 8×6 sheet only when tiles/tileSize change (the expensive
+  // part). Zoom just rescales the cached sheet, so wheel-zoom stays smooth.
+  useEffect(() => {
+    nativeRef.current = tiles ? composeNativeSheet(tiles, tileSize) : null
+  }, [tiles, tileSize])
+
   useEffect(() => {
     const cv = ref.current
-    if (!cv) return
-    const native = composeNativeSheet(tiles, tileSize)
+    const native = nativeRef.current
+    if (!cv || !native) return
     cv.width = native.width * scale
     cv.height = native.height * scale
     const ctx = cv.getContext('2d')
     ctx.imageSmoothingEnabled = false
     ctx.drawImage(native, 0, 0, native.width, native.height, 0, 0, cv.width, cv.height)
   }, [tiles, tileSize, scale])
+
+  // Non-passive wheel zoom (only when interactive — the preview sheet omits it).
+  const handleWheel = useCallback((e) => {
+    if (!onZoomChange) return
+    e.preventDefault()
+    onZoomChange(e.deltaY < 0 ? 1 : -1)
+  }, [onZoomChange])
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el || !onZoomChange) return
+    el.addEventListener('wheel', handleWheel, { passive: false })
+    return () => el.removeEventListener('wheel', handleWheel)
+  }, [handleWheel, onZoomChange])
+
   return <canvas ref={ref} className={className} />
 }
 
@@ -37,9 +72,18 @@ export function EditorWorkspace({
   drawing, tiles, onGenerate, onAITile, onAIProcedural, biomeId, savedCount,
   editorKind, setEditorKind,
 }) {
-  const [zoom, setZoom] = useState(4)
+  const [zoom, setZoom] = useState(() => fitSheetZoom(tileSize))
   const [exportScale, setExportScale] = useState(1)
-  const cols = 8, rows = 6
+  const cols = 8
+  const rows = 6
+
+  // Keep the procedural sheet fitted when the tile size changes.
+  useEffect(() => { setZoom(fitSheetZoom(tileSize)) }, [tileSize])
+
+  const changeZoom = (delta) =>
+    drawing.setZoom((z) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z + delta)))
+  const changeSheetZoom = (delta) =>
+    setZoom((z) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z + delta)))
 
   const handleExport = () => {
     if (!tiles) return
@@ -48,21 +92,32 @@ export function EditorWorkspace({
 
   return (
     <div className="editor-grid">
-      {/* LEFT */}
       <aside className="panel">
         <div className="panel-head">
-          <Segmented full value={editorKind} onChange={setEditorKind}
-            options={[{ value: 'tileset', label: 'Tileset' }, { value: 'prop', label: 'Assets' }]} />
+          <Segmented
+            full
+            value={editorKind}
+            onChange={setEditorKind}
+            options={[{ value: 'tileset', label: 'Tileset' }, { value: 'prop', label: 'Assets' }]}
+          />
         </div>
         <div className="panel-scroll">
           <Section title="Mode" icon="layers">
-            <Segmented full size="sm" value={mode} onChange={setMode}
-              options={[{ value: 'procedural', label: 'Procedural' }, { value: 'draw', label: 'Manual' }]} />
+            <Segmented
+              full
+              size="sm"
+              value={mode}
+              onChange={setMode}
+              options={[{ value: 'procedural', label: 'Procedural' }, { value: 'draw', label: 'Manual' }]}
+            />
             <p className="hint">Procedural builds all 48 tiles from the biome palette. Manual draws a base tile.</p>
           </Section>
 
-          <Section title={`Biome palette · ${biome.label}`} icon="brush"
-            right={<span className="chip-mini" onClick={(e) => { e.stopPropagation(); onShuffleColors() }} title="Shuffle">⤭</span>}>
+          <Section
+            title={`Biome palette · ${biome.label}`}
+            icon="brush"
+            right={<span className="chip-mini" onClick={(e) => { e.stopPropagation(); onShuffleColors() }} title="Shuffle">⤭</span>}
+          >
             {PAL_KEYS.map(([k, label]) => (
               <ColorRow key={k} label={label} value={biome.colors[k]} onChange={(v) => onColorChange(k, v)} />
             ))}
@@ -77,8 +132,13 @@ export function EditorWorkspace({
               <p className="hint">Quick colors for Manual painting.</p>
               <div className="swatch-grid">
                 {QUICK_SWATCHES.map((c) => (
-                  <button key={c} className={`swatch ${drawing.activeColor === c ? 'active' : ''}`}
-                    style={{ background: c }} title={c} onClick={() => drawing.setActiveColor(c)} />
+                  <button
+                    key={c}
+                    className={`swatch ${drawing.activeColor === c ? 'active' : ''}`}
+                    style={{ background: c }}
+                    title={c}
+                    onClick={() => drawing.setActiveColor(c)}
+                  />
                 ))}
               </div>
             </Section>
@@ -92,21 +152,34 @@ export function EditorWorkspace({
         </div>
       </aside>
 
-      {/* CENTER */}
       <main className="stage">
         <div className="stage-toolbar">
-          <Segmented size="sm" value={mode} onChange={setMode}
-            options={[{ value: 'procedural', label: 'Procedural' }, { value: 'draw', label: 'Manual' }]} />
+          <Segmented
+            size="sm"
+            value={mode}
+            onChange={setMode}
+            options={[{ value: 'procedural', label: 'Procedural' }, { value: 'draw', label: 'Manual' }]}
+          />
           <div className="biome-pill"><span className="dot" style={{ background: biome.colors.primary }} /> {biome.label}</div>
           <div className="spacer" />
           <span className="tool-meta">{cols} × {rows} · {tileSize}px</span>
-          {mode === 'draw' && (
-            <div className="zoom-ctrl">
-              <button onClick={() => drawing.setZoom((z) => Math.max(2, z - 1))}>−</button>
-              <span>{drawing.zoom}×</span>
-              <button onClick={() => drawing.setZoom((z) => Math.min(32, z + 1))}>+</button>
-            </div>
-          )}
+          <div className="zoom-ctrl">
+            {mode === 'draw' ? (
+              <>
+                <button onClick={() => changeZoom(-1)} disabled={drawing.zoom <= MIN_ZOOM} title="Zoom out">−</button>
+                <span>{drawing.zoom}×</span>
+                <button onClick={() => changeZoom(1)} disabled={drawing.zoom >= MAX_ZOOM} title="Zoom in">+</button>
+                <button onClick={() => drawing.setZoom(fitTileZoom(tileSize))} title="Fit to stage" style={{ fontSize: 10, padding: '0 6px' }}>Fit</button>
+              </>
+            ) : (
+              <>
+                <button onClick={() => changeSheetZoom(-1)} disabled={zoom <= MIN_ZOOM} title="Zoom out">−</button>
+                <span>{zoom}×</span>
+                <button onClick={() => changeSheetZoom(1)} disabled={zoom >= MAX_ZOOM} title="Zoom in">+</button>
+                <button onClick={() => setZoom(fitSheetZoom(tileSize))} title="Fit to stage" style={{ fontSize: 10, padding: '0 6px' }}>Fit</button>
+              </>
+            )}
+          </div>
         </div>
 
         <div className="stage-canvas">
@@ -114,15 +187,20 @@ export function EditorWorkspace({
             <div style={{ display: 'flex', gap: 18, alignItems: 'flex-start', flexWrap: 'wrap', justifyContent: 'center' }}>
               <div className="canvas-frame">
                 <PixelCanvas
-                  pixels={drawing.pixels} tileSize={tileSize} zoom={drawing.zoom}
-                  onStartStroke={drawing.startStroke} onContinueStroke={drawing.continueStroke} onEndStroke={drawing.endStroke}
+                  pixels={drawing.pixels}
+                  tileSize={tileSize}
+                  zoom={drawing.zoom}
+                  onStartStroke={drawing.startStroke}
+                  onContinueStroke={drawing.continueStroke}
+                  onEndStroke={drawing.endStroke}
+                  onZoomChange={changeZoom}
                 />
               </div>
               <TilePreviewMosaic pixels={drawing.committedPixels} tileSize={tileSize} />
             </div>
           ) : (
             <div className="canvas-frame">
-              <SheetCanvas tiles={tiles} tileSize={tileSize} scale={zoom} className="main-canvas" />
+              <SheetCanvas tiles={tiles} tileSize={tileSize} scale={zoom} className="main-canvas" onZoomChange={changeSheetZoom} />
             </div>
           )}
         </div>
@@ -136,7 +214,6 @@ export function EditorWorkspace({
         </div>
       </main>
 
-      {/* RIGHT */}
       <aside className="panel">
         <div className="panel-scroll">
           <Section title={`Preview · ${cols} × ${rows}`} icon="image">
@@ -152,8 +229,13 @@ export function EditorWorkspace({
 
           <Section title="Export" icon="download">
             <label className="field-label">Scale</label>
-            <Segmented full size="sm" value={exportScale} onChange={setExportScale}
-              options={[{ value: 1, label: '1×' }, { value: 2, label: '2×' }, { value: 4, label: '4×' }]} />
+            <Segmented
+              full
+              size="sm"
+              value={exportScale}
+              onChange={setExportScale}
+              options={[{ value: 1, label: '1×' }, { value: 2, label: '2×' }, { value: 4, label: '4×' }]}
+            />
             <div className="export-info">
               <span>Output</span>
               <b>{cols * tileSize * exportScale} × {rows * tileSize * exportScale}px</b>

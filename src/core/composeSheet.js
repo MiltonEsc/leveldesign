@@ -17,12 +17,11 @@ export function composeNativeSheet(tiles, tileSize) {
     if (!td) continue
     const col = i % SHEET_COLS
     const row = Math.floor(i / SHEET_COLS)
-    // Draw via a temp canvas (putImageData ignores the destination offset scaling)
-    const tmp = document.createElement('canvas')
-    tmp.width = tileSize
-    tmp.height = tileSize
-    tmp.getContext('2d').putImageData(td, 0, 0)
-    ctx.drawImage(tmp, col * tileSize, row * tileSize)
+    // putImageData honours the dx/dy destination offset and writes raw pixels.
+    // We compose at native resolution (no scaling), so no per-tile temp canvas
+    // is needed — creating 48 canvas contexts here cost ~15ms each on some GPUs,
+    // making every tile regeneration take >1s. Direct putImageData is ~instant.
+    ctx.putImageData(td, col * tileSize, row * tileSize)
   }
   return canvas
 }
