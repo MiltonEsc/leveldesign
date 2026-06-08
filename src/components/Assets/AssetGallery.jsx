@@ -35,6 +35,7 @@ function AssetThumb({ asset, size = 56 }) {
 
 export function AssetGallery({
   assets, selectedId, onSelect, onRemove, onExport, onLoadToEditor, onExportAll,
+  loading = false, error = '',
 }) {
   return (
     <div className="asset-gallery">
@@ -50,7 +51,11 @@ export function AssetGallery({
         </button>
       </div>
 
-      {assets.length === 0 ? (
+      {error ? (
+        <div className="asset-gallery-empty asset-gallery-error">Cloud storage error: {error}</div>
+      ) : loading ? (
+        <div className="asset-gallery-empty">Loading saved props…</div>
+      ) : assets.length === 0 ? (
         <div className="asset-gallery-empty">No props yet. Generate or draw one, then “Save to gallery”.</div>
       ) : (
         <div className="asset-gallery-grid">

@@ -38,6 +38,7 @@ export function LevelCanvas({
   const layerStateCacheRef = useRef(new Map())
   const terrainTextureCache = useRef(new WeakMap())
   const assetTextureCache = useRef(new Map())
+  const propSpriteCacheRef = useRef(new Map())
   const [pixiReady, setPixiReady] = useState(false)
 
   const displayW = width * cellPx
@@ -160,6 +161,9 @@ export function LevelCanvas({
       setPixiReady(false)
       appReadyRef.current = false
       layerStateCacheRef.current = new Map()
+      // Sprites belong to the app being destroyed; drop the stale cache so the
+      // props effect rebuilds against the fresh container after re-init.
+      propSpriteCacheRef.current = new Map()
       appRef.current = null
       terrainContainerRef.current = null
       propsContainerRef.current = null
@@ -308,18 +312,36 @@ export function LevelCanvas({
     if (!pixiReady || !propsContainerRef.current) return
 
     const propsContainer = propsContainerRef.current
-    propsContainer.removeChildren()
+    const cache = propSpriteCacheRef.current
+    const seen = new Set()
 
+    // Reconcile sprites against placedProps by id instead of rebuilding the
+    // whole layer, so placing/removing one prop touches only that sprite.
     for (const placed of placedProps) {
       const entry = assetTextures[placed.assetId]
       if (!entry) continue
-      const sprite = new Sprite(entry.texture)
-      sprite.roundPixels = true
+      seen.add(placed.id)
+
+      let sprite = cache.get(placed.id)
+      if (!sprite) {
+        sprite = new Sprite(entry.texture)
+        sprite.roundPixels = true
+        propsContainer.addChild(sprite)
+        cache.set(placed.id, sprite)
+      } else if (sprite.texture !== entry.texture) {
+        sprite.texture = entry.texture
+      }
       sprite.x = placed.x * tileSize
       sprite.y = placed.y * tileSize
       sprite.width = entry.cols * tileSize
       sprite.height = entry.rows * tileSize
-      propsContainer.addChild(sprite)
+    }
+
+    for (const [id, sprite] of cache) {
+      if (seen.has(id)) continue
+      propsContainer.removeChild(sprite)
+      sprite.destroy()
+      cache.delete(id)
     }
   }, [pixiReady, placedProps, assetTextures, tileSize])
 

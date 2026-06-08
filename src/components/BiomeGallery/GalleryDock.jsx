@@ -57,11 +57,17 @@ export function GalleryDock({
   biomes, activeBiomeId, activeSavedTilesetId, onSelectBiome,
   tilesets, defaultName, onSaveTileset, onLoadTileset, onRemoveTileset,
   assets, selectedAssetId, onSelectAsset,
+  tilesetsLoading = false, tilesetsError = '', propsLoading = false, propsError = '',
 }) {
   const [tab, setTab] = useState('tilesets')
   const [scope, setScope] = useState('all')
   const [search, setSearch] = useState('')
   const [name, setName] = useState('')
+
+  // Cloud-storage status for the active tab (props vs tilesets).
+  const status = tab === 'props'
+    ? { loading: propsLoading, error: propsError }
+    : { loading: tilesetsLoading, error: tilesetsError }
 
   const q = search.trim().toLowerCase()
   const biomeList = biomes.filter(b => b.label.toLowerCase().includes(q) || b.id.toLowerCase().includes(q))
@@ -97,6 +103,11 @@ export function GalleryDock({
       </div>
 
       <div className="lib-rail">
+        {status.error
+          ? <div className="lib-empty lib-error">Cloud storage error: {status.error}</div>
+          : status.loading
+            ? <div className="lib-empty">Loading saved items…</div>
+            : null}
         {tab === 'tilesets' ? (
           <>
             {showBiomes && biomeList.map(b => (

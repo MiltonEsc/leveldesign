@@ -267,7 +267,22 @@ export function generateTilesFromTextures(centerData, edgeData, tileSize, biomeC
 }
 
 // Generates all 48 tiles procedurally for a given biome
+// Bounded memo of generated biome sheets. The signature includes colors and
+// procedural params (not just an id) so color edits still regenerate. Callers
+// treat the 48 ImageData tiles as read-only (compose/export/infer never mutate
+// them), which makes returning shared references safe.
+const biomeTilesCache = new Map()
+const BIOME_CACHE_MAX = 16
+
+function biomeSignature(biome, tileSize) {
+  return `${tileSize}|${JSON.stringify(biome.colors)}|${JSON.stringify(biome.proceduralParams || null)}`
+}
+
 export function generateAllBiomeTiles(biome, tileSize) {
+  const sig = biomeSignature(biome, tileSize)
+  const cached = biomeTilesCache.get(sig)
+  if (cached) return cached
+
   const tiles = new Array(48)
 
   // Tile 0: transparent empty slot
@@ -292,5 +307,9 @@ export function generateAllBiomeTiles(biome, tileSize) {
     tiles[sheetIndex] = drawTile(mask, tileSize, biome.colors, biome.proceduralParams)
   }
 
+  if (biomeTilesCache.size >= BIOME_CACHE_MAX) {
+    biomeTilesCache.delete(biomeTilesCache.keys().next().value)
+  }
+  biomeTilesCache.set(sig, tiles)
   return tiles
 }

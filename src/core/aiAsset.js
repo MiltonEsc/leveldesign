@@ -1,87 +1,34 @@
-// AI scenery-prop generation via the OpenAI Images API.
-// Props need transparent backgrounds and crisp pixel-art post-processing.
-// In dev, requests go through the Vite proxy (/openai) to avoid CORS.
+// AI scenery-prop generation via the Gemini API.
+// Props are generated on a solid chroma background, then keyed out locally.
 
-import { AI_MODELS } from './aiTile.js'
+import { AI_MODELS, generateImage } from './aiTile.js'
 
 export { AI_MODELS }
 
-const API_BASE = import.meta.env.DEV ? '/openai/v1' : 'https://api.openai.com/v1'
+const DEFAULT_ASSET_MODEL = 'gemini-2.5-flash-image'
+const DEFAULT_QUALITY = 'medium'
 
 const STYLE_BASE = `
-Generate a single pixel-art game prop.
-
-
-Design the object specifically to remain readable at that resolution.
-
+Generate a single isolated pixel-art game prop.
+Use a clear game sprite silhouette.
+Design the object specifically to remain readable at small pixel sizes.
 Use large shapes.
-
 Use a limited color palette.
-
 Avoid tiny details.
-
 Avoid sub-pixel features.
-
 Avoid anti-aliasing.
-
 Avoid gradients.
-
 Avoid soft shading.
-
-Transparent background.
+No text, labels, UI, ground, or cast shadow.
 `
 
-const BG_TRANSPARENT =
-  'Transparent background. No ground, no cast shadow, no text. Subject: '
-
 const BG_SOLID =
-  'Plain solid flat magenta (#FF00FF) background filling all empty space. ' +
-  'No ground, no cast shadow, no text. Subject: '
+  'Place the prop on a plain solid flat magenta (#FF00FF) background filling all empty space. ' +
+  'Do not use magenta inside the prop itself. Subject: '
 
 const CHROMA_TOLERANCE = 60
 const POSTERIZE_LEVELS = 999
 const ALPHA_THRESHOLD = 128
-
-function buildBody(model, prompt, transparent, quality = 'low') {
-  const body = {
-    model,
-    prompt,
-    size: '1024x1024',
-    n: 1,
-    quality,
-    output_format: 'png',
-  }
-
-  if (transparent) {
-    body.background = 'transparent'
-  }
-
-  return body
-}
-
-async function requestImage(apiKey, body) {
-  return fetch(`${API_BASE}/images/generations`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(body),
-  })
-}
-
-async function readError(res) {
-  let msg = `OpenAI request failed (HTTP ${res.status}).`
-
-  try {
-    const err = await res.json()
-    if (err?.error?.message) msg = err.error.message
-  } catch {
-    // Ignore parse error.
-  }
-
-  return msg
-}
 
 function chromaKey(data, w, h, tolerance = CHROMA_TOLERANCE) {
   const corners = [
@@ -202,19 +149,6 @@ function containToTargetCanvas(srcCanvas, pxW, pxH) {
   return out
 }
 
-function imageToCanvas(img) {
-  const canvas = document.createElement('canvas')
-  canvas.width = img.width
-  canvas.height = img.height
-
-  const ctx = canvas.getContext('2d')
-  ctx.imageSmoothingEnabled = false
-  ctx.clearRect(0, 0, canvas.width, canvas.height)
-  ctx.drawImage(img, 0, 0)
-
-  return canvas
-}
-
 function downscaleCanvasPixelPerfect(srcCanvas, pxW, pxH) {
   const out = document.createElement('canvas')
   out.width = pxW
@@ -228,104 +162,64 @@ function downscaleCanvasPixelPerfect(srcCanvas, pxW, pxH) {
   return out
 }
 
-function downscaleToAsset(src, pxW, pxH, crossOrigin, keyOut) {
-  return new Promise((resolve, reject) => {
-    const img = new Image()
+function pixelsToCanvas(data, width, height) {
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
 
-    if (crossOrigin) img.crossOrigin = 'anonymous'
+  const ctx = canvas.getContext('2d')
+  ctx.imageSmoothingEnabled = false
+  const id = ctx.createImageData(width, height)
+  id.data.set(data)
+  ctx.putImageData(id, 0, 0)
 
-    img.onload = () => {
-      try {
-        let canvas = imageToCanvas(img)
+  return canvas
+}
 
-        if (keyOut) {
-          const ctx = canvas.getContext('2d')
-          const id = ctx.getImageData(0, 0, canvas.width, canvas.height)
-          chromaKey(id.data, canvas.width, canvas.height)
-          deFringeMagenta(id.data)
-          solidifyAlpha(id.data)
-          ctx.putImageData(id, 0, 0)
-        }
+function postprocessAssetCanvas(srcCanvas, pxW, pxH) {
+  let canvas = srcCanvas
+  const sourceCtx = canvas.getContext('2d')
+  const sourceId = sourceCtx.getImageData(0, 0, canvas.width, canvas.height)
 
-        canvas = cropTransparentBounds(canvas)
-        canvas = containToTargetCanvas(canvas, pxW, pxH)
-        canvas = downscaleCanvasPixelPerfect(canvas, pxW, pxH)
+  chromaKey(sourceId.data, canvas.width, canvas.height)
+  deFringeMagenta(sourceId.data)
+  solidifyAlpha(sourceId.data)
+  sourceCtx.putImageData(sourceId, 0, 0)
 
-        const ctx = canvas.getContext('2d')
-        const id = ctx.getImageData(0, 0, pxW, pxH)
+  canvas = cropTransparentBounds(canvas)
+  canvas = containToTargetCanvas(canvas, pxW, pxH)
+  canvas = downscaleCanvasPixelPerfect(canvas, pxW, pxH)
 
-        solidifyAlpha(id.data)
-        posterize(id.data)
+  const ctx = canvas.getContext('2d')
+  const id = ctx.getImageData(0, 0, pxW, pxH)
 
-        resolve(new Uint8ClampedArray(id.data))
-      } catch {
-        reject(new Error('Could not read the image. Try the gpt-image-1 model or check CORS.'))
-      }
-    }
+  solidifyAlpha(id.data)
+  posterize(id.data)
 
-    img.onerror = () => reject(new Error('Failed to load the generated image.'))
-    img.src = src
-  })
+  return new Uint8ClampedArray(id.data)
 }
 
 export async function generateAssetWithAI({
   prompt,
-  apiKey,
-  model = 'gpt-image-1',
-  quality = 'low',
+  model = DEFAULT_ASSET_MODEL,
+  quality = DEFAULT_QUALITY,
   pxW,
   pxH,
 }) {
-  if (!apiKey) throw new Error('Missing OpenAI API key.')
   if (!prompt || !prompt.trim()) throw new Error('Enter a prompt describing the prop.')
   if (!pxW || !pxH) throw new Error('Missing target pixel size.')
 
   const subject = prompt.trim()
+  const generated = await generateImage({
+    prompt: STYLE_BASE + BG_SOLID + subject,
+    model,
+    quality,
+    outputFormat: 'png',
+  })
 
-  let res = await requestImage(
-    apiKey,
-    buildBody(model, STYLE_BASE + BG_TRANSPARENT + subject, true, quality),
+  return postprocessAssetCanvas(
+    pixelsToCanvas(generated.data, generated.width, generated.height),
+    pxW,
+    pxH,
   )
-
-  let keyOut = false
-
-  if (!res.ok) {
-    const msg = await readError(res)
-
-    if (/transparent|background/i.test(msg)) {
-      res = await requestImage(
-        apiKey,
-        buildBody(model, STYLE_BASE + BG_SOLID + subject, false, quality),
-      )
-
-      keyOut = true
-
-      if (!res.ok) {
-        throw new Error(await readError(res))
-      }
-    } else {
-      throw new Error(msg)
-    }
-  }
-
-  const json = await res.json()
-  const item = json?.data?.[0]
-
-  if (!item) throw new Error('No image returned by the API.')
-
-  if (item.b64_json) {
-    return downscaleToAsset(
-      `data:image/png;base64,${item.b64_json}`,
-      pxW,
-      pxH,
-      false,
-      keyOut,
-    )
-  }
-
-  if (item.url) {
-    return downscaleToAsset(item.url, pxW, pxH, true, keyOut)
-  }
-
-  throw new Error('No image data in the API response.')
 }

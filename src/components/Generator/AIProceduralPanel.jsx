@@ -1,8 +1,7 @@
 import { useState } from 'react'
-import { generateBaseTileWithAI, AI_MODELS } from '../../core/aiTile.js'
+import { generateBaseTileWithAI } from '../../core/aiTile.js'
+import { useAIModel } from '../../hooks/useAIModel.js'
 
-const LS_KEY = 'openai_api_key'
-const LS_MODEL = 'openai_image_model'
 const TEXTURE_PRESETS = [
   {
     label: 'Frozen cavern',
@@ -21,38 +20,41 @@ const TEXTURE_PRESETS = [
   },
 ]
 
-function loadKey() {
-  return localStorage.getItem(LS_KEY) || import.meta.env.VITE_OPENAI_API_KEY || ''
-}
-
 // Generates a CENTER texture (and optional BORDER texture) with AI, then hands
 // them to the tilesheet to compose all 48 autotiles. The border is a distinct
 // material (e.g. snow) so edges aren't a flat color.
-export function AIProceduralPanel({ tileSize, onGenerated }) {
+export function AIProceduralPanel({ tileSize, paletteHint, onGenerated }) {
   const [center, setCenter] = useState('')
   const [border, setBorder] = useState('')
-  const [apiKey, setApiKey] = useState(loadKey)
-  const [model, setModel]   = useState(() => localStorage.getItem(LS_MODEL) || 'gpt-image-1')
-  const [loading, setLoading] = useState(false)
-  const [error, setError]   = useState('')
-
-  const handleKeyChange = (v) => { setApiKey(v); localStorage.setItem(LS_KEY, v) }
-  const handleModelChange = (v) => { setModel(v); localStorage.setItem(LS_MODEL, v) }
+  const { model, setModel, loading, error, run, AI_MODELS } = useAIModel()
 
   const handleGenerate = async () => {
-    setError('')
-    setLoading(true)
-    try {
-      const centerPixels = await generateBaseTileWithAI({ prompt: center, apiKey, model, tileSize })
-      let edgePixels = null
+    const result = await run(async () => {
+      const centerResult = await generateBaseTileWithAI({
+        prompt: center,
+        model,
+        tileSize,
+        role: 'center',
+        paletteHint,
+      })
+      let edgeResult = null
       if (border.trim()) {
-        edgePixels = await generateBaseTileWithAI({ prompt: border, apiKey, model, tileSize })
+        edgeResult = await generateBaseTileWithAI({
+          prompt: border,
+          model,
+          tileSize,
+          role: 'edge',
+          paletteHint,
+          contextPrompt: center,
+        })
       }
-      onGenerated(centerPixels, edgePixels)
-    } catch (e) {
-      setError(e.message || 'Generation failed.')
-    } finally {
-      setLoading(false)
+      return { centerResult, edgeResult }
+    })
+    if (result) {
+      onGenerated(result.centerResult.pixels, result.edgeResult?.pixels || null, {
+        center: result.centerResult,
+        edge: result.edgeResult,
+      })
     }
   }
 
@@ -93,21 +95,12 @@ export function AIProceduralPanel({ tileSize, onGenerated }) {
         disabled={loading}
       />
 
-      <select className="ai-model" value={model} onChange={e => handleModelChange(e.target.value)} disabled={loading}>
+      <select className="ai-model" value={model} onChange={e => setModel(e.target.value)} disabled={loading}>
         {AI_MODELS.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
       </select>
 
-      <input
-        className="ai-key"
-        type="password"
-        placeholder="OpenAI API key (sk-…)"
-        value={apiKey}
-        onChange={e => handleKeyChange(e.target.value)}
-        disabled={loading}
-      />
-
-      <button className="ai-generate-btn" onClick={handleGenerate} disabled={loading || !center.trim() || !apiKey}>
-        {loading ? 'Generating…' : 'Generate with AI'}
+      <button className="ai-generate-btn" onClick={handleGenerate} disabled={loading || !center.trim()}>
+        {loading ? 'Generating...' : 'Generate with AI'}
       </button>
 
       {error && <div className="ai-error">{error}</div>}

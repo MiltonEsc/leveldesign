@@ -1,14 +1,17 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react'
 import { Segmented } from '../ui/Segmented.jsx'
 import { Section } from '../ui/Section.jsx'
 import { Btn } from '../ui/Btn.jsx'
 import { ColorRow } from '../ui/ColorRow.jsx'
 import { PixelCanvas } from './PixelCanvas.jsx'
 import { TilePreviewMosaic } from './TilePreviewMosaic.jsx'
-import { AITilePanel } from '../Generator/AITilePanel.jsx'
-import { AIProceduralPanel } from '../Generator/AIProceduralPanel.jsx'
 import { composeNativeSheet } from '../../core/composeSheet.js'
 import { exportTilesheet } from '../../core/exportSheet.js'
+
+// AI panels pull in the Gemini/OpenAI request code; load them only when the
+// (collapsed-by-default) "AI textures" section is opened.
+const AITilePanel = lazy(() => import('../Generator/AITilePanel.jsx').then(m => ({ default: m.AITilePanel })))
+const AIProceduralPanel = lazy(() => import('../Generator/AIProceduralPanel.jsx').then(m => ({ default: m.AIProceduralPanel })))
 
 const PAL_KEYS = [
   ['primary', 'Primary'],
@@ -145,9 +148,11 @@ export function EditorWorkspace({
           )}
 
           <Section title="AI textures" icon="spark" defaultOpen={false}>
-            {mode === 'draw'
-              ? <AITilePanel tileSize={tileSize} onGenerated={onAITile} />
-              : <AIProceduralPanel tileSize={tileSize} onGenerated={onAIProcedural} />}
+            <Suspense fallback={<div className="ai-hint">Loading AI…</div>}>
+              {mode === 'draw'
+                ? <AITilePanel tileSize={tileSize} paletteHint={biome.colors} onGenerated={onAITile} />
+                : <AIProceduralPanel tileSize={tileSize} paletteHint={biome.colors} onGenerated={onAIProcedural} />}
+            </Suspense>
           </Section>
         </div>
       </aside>

@@ -1,44 +1,172 @@
-// AI base-tile generation via the OpenAI Images API.
-// In dev, requests go through the Vite proxy (/openai) to avoid CORS.
-const API_BASE = import.meta.env.DEV ? '/openai/v1' : 'https://api.openai.com/v1'
+// AI base-tile generation. Supports two providers, picked per model:
+//   - Gemini (Google Generative Language API)
+//   - OpenAI (Images API, gpt-image family)
+// In dev, requests go through Vite proxies (/gemini, /openai) to avoid CORS.
+// API keys are read ONLY from .env.local (never from the UI). See resolveApiKey.
+const GEMINI_BASE = import.meta.env?.DEV ? '/gemini/v1beta' : 'https://generativelanguage.googleapis.com/v1beta'
+const OPENAI_BASE = import.meta.env?.DEV ? '/openai/v1' : 'https://api.openai.com/v1'
+const DEFAULT_IMAGE_MODEL = 'gemini-2.5-flash-image'
+const FALLBACK_IMAGE_MODEL = 'gemini-2.5-flash-image'
+const DEFAULT_QUALITY = 'high'
+const DEFAULT_OUTPUT_FORMAT = 'png'
+const MAX_TILE_COLORS = 10
 
-const STYLE_PREFIX =
-  'Pixel art video-game terrain tile texture, top-down view, seamless tileable, ' +
-  'flat shading, simple, no border, no text, fills the entire square frame. Subject: '
-
-// OpenAI retired dall-e-2/dall-e-3; the available image models are the
-// gpt-image family. gpt-image-1 is the proven default.
 export const AI_MODELS = [
-  { id: 'gpt-image-1',      label: 'gpt-image-1 (stable)' },
-  { id: 'gpt-image-1-mini', label: 'gpt-image-1-mini (fast, cheap)' },
-  { id: 'gpt-image-1.5',    label: 'gpt-image-1.5' },
-  { id: 'gpt-image-2',      label: 'gpt-image-2 (newest)' },
+  { id: 'gemini-2.5-flash-image', label: 'Gemini 2.5 Flash Image', provider: 'gemini' },
+  { id: 'gemini-3-pro-image',     label: 'Gemini 3 Pro Image',     provider: 'gemini' },
+  { id: 'gpt-image-1',            label: 'GPT Image 1',            provider: 'openai' },
+  { id: 'gpt-image-1-mini',       label: 'GPT Image 1 Mini',       provider: 'openai' },
 ]
 
-function buildBody(model, prompt) {
-  // All gpt-image models return b64_json and take size/quality (no response_format).
-  return { model, prompt, size: '1024x1024', n: 1, quality: 'low' }
+export function providerForModel(model) {
+  return AI_MODELS.find(m => m.id === model)?.provider || 'gemini'
 }
 
-// Downscales an image (data URL or remote URL) to tileSize×tileSize RGBA pixels.
-function downscaleToTile(src, tileSize, crossOrigin) {
+// Keys live only in .env.local (git-ignored). VITE_* vars are still embedded in
+// the client bundle at build time, so this is "not shown in the UI", not secret.
+export function resolveApiKey(provider) {
+  const env = import.meta.env || {}
+  if (provider === 'openai') return env.VITE_OPENAI_API_KEY || ''
+  return env.VITE_GEMINI_API_KEY || ''
+}
+
+export function buildTilePrompt({
+  subject,
+  role = 'center',
+  tileSize = 16,
+  paletteHint = null,
+  contextPrompt = '',
+}) {
+  const cleanedSubject = (subject || '').trim()
+  const palette = paletteHint
+    ? [
+        paletteHint.primary,
+        paletteHint.secondary,
+        paletteHint.border,
+        paletteHint.highlight,
+        paletteHint.shadow,
+      ].filter(Boolean).join(', ')
+    : ''
+
+  const shared = [
+    'Pixel art video-game terrain material.',
+    'Top-down orthographic view.',
+    'Seamless tileable square texture.',
+    'No objects, characters, icons, text, labels, shadows, UI, or perspective.',
+    'Large readable pixel clusters, limited palette, crisp material identity.',
+    `Must remain readable when downscaled to ${tileSize}px.`,
+    palette ? `Use this color mood as guidance, not as exact text: ${palette}.` : '',
+  ].filter(Boolean)
+
+  if (role === 'edge') {
+    return [
+      ...shared,
+      'Generate the exposed edge or border material for an autotile.',
+      'Use slightly stronger contrast than the center material.',
+      contextPrompt ? `It must visually match this center material: ${contextPrompt.trim()}.` : '',
+      `Border material subject: ${cleanedSubject}`,
+    ].filter(Boolean).join(' ')
+  }
+
+  return [
+    ...shared,
+    'Generate the center fill material only.',
+    'Avoid drawing an outer border; the app will compose autotile borders separately.',
+    `Center material subject: ${cleanedSubject}`,
+  ].join(' ')
+}
+
+// Gemini image request body. Note: the field is `imageConfig` (NOT
+// `responseFormat`, which the API rejects with "Unknown name responseFormat"),
+// and `responseModalities` requires the v1beta endpoint.
+export function buildImageRequestBody(model, prompt, {
+  quality = DEFAULT_QUALITY,
+  outputFormat = DEFAULT_OUTPUT_FORMAT,
+} = {}) {
+  return {
+    contents: [{
+      parts: [{ text: prompt }],
+    }],
+    generationConfig: {
+      responseModalities: ['IMAGE'],
+      imageConfig: {
+        aspectRatio: '1:1',
+      },
+    },
+    meta: {
+      model,
+      quality,
+      outputFormat,
+    },
+  }
+}
+
+async function requestGeminiImage(apiKey, body) {
+  const model = body?.meta?.model || DEFAULT_IMAGE_MODEL
+  const { meta, ...requestBody } = body
+  return fetch(`${GEMINI_BASE}/models/${model}:generateContent`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': apiKey,
+    },
+    body: JSON.stringify(requestBody),
+  })
+}
+
+function openAISize(quality) {
+  // gpt-image models only accept fixed sizes; 1:1 square for tiles/props.
+  return '1024x1024'
+}
+
+async function requestOpenAIImage(apiKey, model, prompt, { quality = DEFAULT_QUALITY } = {}) {
+  return fetch(`${OPENAI_BASE}/images/generations`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      prompt,
+      n: 1,
+      size: openAISize(quality),
+      quality,
+    }),
+  })
+}
+
+async function readError(res, provider) {
+  let msg = `${provider === 'openai' ? 'OpenAI' : 'Gemini'} request failed (HTTP ${res.status}).`
+  try {
+    const err = await res.json()
+    if (err?.error?.message) msg = err.error.message
+  } catch {
+    // Ignore parse error.
+  }
+  return msg
+}
+
+function decodeGeneratedImage(src, crossOrigin) {
   return new Promise((resolve, reject) => {
     const img = new Image()
     if (crossOrigin) img.crossOrigin = 'anonymous'
     img.onload = () => {
       const c = document.createElement('canvas')
-      c.width = tileSize
-      c.height = tileSize
+      c.width = img.width
+      c.height = img.height
       const ctx = c.getContext('2d')
-      ctx.imageSmoothingEnabled = true
-      ctx.imageSmoothingQuality = 'high'
-      ctx.drawImage(img, 0, 0, img.width, img.height, 0, 0, tileSize, tileSize)
+      ctx.imageSmoothingEnabled = false
+      ctx.drawImage(img, 0, 0)
       try {
-        const id = ctx.getImageData(0, 0, tileSize, tileSize)
-        for (let i = 0; i < id.data.length; i += 4) id.data[i + 3] = 255 // force opaque
-        resolve(new Uint8ClampedArray(id.data))
+        const id = ctx.getImageData(0, 0, c.width, c.height)
+        resolve({
+          data: new Uint8ClampedArray(id.data),
+          width: c.width,
+          height: c.height,
+        })
       } catch {
-        reject(new Error('Could not read the image (CORS). Try the gpt-image-1 model.'))
+        reject(new Error('Could not read the Gemini image response. Check browser CORS or model access.'))
       }
     }
     img.onerror = () => reject(new Error('Failed to load the generated image.'))
@@ -46,37 +174,350 @@ function downscaleToTile(src, tileSize, crossOrigin) {
   })
 }
 
-export async function generateBaseTileWithAI({ prompt, apiKey, model = 'gpt-image-1', tileSize }) {
-  if (!apiKey) throw new Error('Missing OpenAI API key.')
-  if (!prompt || !prompt.trim()) throw new Error('Enter a prompt describing the tile.')
-
-  const res = await fetch(`${API_BASE}/images/generations`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(buildBody(model, STYLE_PREFIX + prompt.trim())),
-  })
-
-  if (!res.ok) {
-    let msg = `OpenAI request failed (HTTP ${res.status}).`
-    try {
-      const err = await res.json()
-      if (err?.error?.message) msg = err.error.message
-    } catch { /* ignore parse error */ }
-    throw new Error(msg)
+function findGeminiInlineImage(json) {
+  const candidates = json?.candidates || []
+  for (const candidate of candidates) {
+    const parts = candidate?.content?.parts || candidate?.parts || []
+    for (const part of parts) {
+      const inline = part.inlineData || part.inline_data
+      if (inline?.data) return inline
+    }
   }
+
+  const parts = json?.content?.parts || json?.parts || []
+  for (const part of parts) {
+    const inline = part.inlineData || part.inline_data
+    if (inline?.data) return inline
+  }
+
+  return null
+}
+
+async function runGeminiAttempt(apiKey, model, prompt, { quality, outputFormat }) {
+  const body = buildImageRequestBody(model, prompt, { quality, outputFormat })
+  const attemptBody = { ...body, meta: { ...body.meta, model } }
+  const res = await requestGeminiImage(apiKey, attemptBody)
+  if (!res.ok) throw new Error(await readError(res, 'gemini'))
 
   const json = await res.json()
-  const item = json?.data?.[0]
-  if (!item) throw new Error('No image returned by the API.')
+  const inline = findGeminiInlineImage(json)
+  if (!inline) throw new Error('No image returned by the Gemini API.')
 
-  if (item.b64_json) {
-    return downscaleToTile(`data:image/png;base64,${item.b64_json}`, tileSize, false)
+  const mimeType = inline.mimeType || inline.mime_type || 'image/png'
+  const decoded = await decodeGeneratedImage(`data:${mimeType};base64,${inline.data}`, false)
+  return { decoded, mimeType }
+}
+
+async function runOpenAIAttempt(apiKey, model, prompt, { quality }) {
+  const res = await requestOpenAIImage(apiKey, model, prompt, { quality })
+  if (!res.ok) throw new Error(await readError(res, 'openai'))
+
+  const json = await res.json()
+  const b64 = json?.data?.[0]?.b64_json
+  if (!b64) throw new Error('No image returned by the OpenAI API.')
+
+  const mimeType = 'image/png'
+  const decoded = await decodeGeneratedImage(`data:${mimeType};base64,${b64}`, false)
+  return { decoded, mimeType }
+}
+
+// Generic image generation. Picks the provider from the model id and resolves
+// the API key from .env.local (VITE_GEMINI_API_KEY / VITE_OPENAI_API_KEY).
+export async function generateImage({
+  prompt,
+  model = DEFAULT_IMAGE_MODEL,
+  quality = DEFAULT_QUALITY,
+  outputFormat = DEFAULT_OUTPUT_FORMAT,
+}) {
+  const provider = providerForModel(model)
+  const apiKey = resolveApiKey(provider)
+  if (!apiKey) {
+    const envVar = provider === 'openai' ? 'VITE_OPENAI_API_KEY' : 'VITE_GEMINI_API_KEY'
+    throw new Error(`Missing ${envVar} in .env.local for the selected model.`)
   }
-  if (item.url) {
-    return downscaleToTile(item.url, tileSize, true)
+
+  // Gemini gets a same-provider fallback model; OpenAI does not.
+  const attempts = provider === 'gemini' && model === DEFAULT_IMAGE_MODEL && FALLBACK_IMAGE_MODEL !== model
+    ? [model, FALLBACK_IMAGE_MODEL]
+    : [model]
+  let lastError = null
+
+  for (const attemptModel of attempts) {
+    try {
+      const { decoded, mimeType } = provider === 'openai'
+        ? await runOpenAIAttempt(apiKey, attemptModel, prompt, { quality })
+        : await runGeminiAttempt(apiKey, attemptModel, prompt, { quality, outputFormat })
+      return {
+        ...decoded,
+        meta: {
+          provider,
+          model: attemptModel,
+          requestedModel: model,
+          fallbackFrom: attemptModel !== model ? model : null,
+          quality,
+          outputFormat,
+          mimeType,
+        },
+      }
+    } catch (e) {
+      lastError = e
+    }
   }
-  throw new Error('No image data in the API response.')
+
+  throw lastError || new Error('Image generation failed.')
+}
+
+function resizeRgbaArea(data, srcW, srcH, dstW, dstH) {
+  if (srcW === dstW && srcH === dstH) return new Uint8ClampedArray(data)
+  const out = new Uint8ClampedArray(dstW * dstH * 4)
+  for (let dy = 0; dy < dstH; dy++) {
+    const y0 = Math.floor((dy * srcH) / dstH)
+    const y1 = Math.max(y0 + 1, Math.floor(((dy + 1) * srcH) / dstH))
+    for (let dx = 0; dx < dstW; dx++) {
+      const x0 = Math.floor((dx * srcW) / dstW)
+      const x1 = Math.max(x0 + 1, Math.floor(((dx + 1) * srcW) / dstW))
+      let r = 0, g = 0, b = 0, a = 0, count = 0
+      for (let sy = y0; sy < y1; sy++) {
+        for (let sx = x0; sx < x1; sx++) {
+          const i = (sy * srcW + sx) * 4
+          r += data[i]
+          g += data[i + 1]
+          b += data[i + 2]
+          a += data[i + 3]
+          count++
+        }
+      }
+      const o = (dy * dstW + dx) * 4
+      out[o] = Math.round(r / count)
+      out[o + 1] = Math.round(g / count)
+      out[o + 2] = Math.round(b / count)
+      out[o + 3] = Math.round(a / count)
+    }
+  }
+  return out
+}
+
+const clampByte = (v) => Math.max(0, Math.min(255, Math.round(v)))
+
+function sharpenPixels(data, w, h, amount = 0.38) {
+  const out = new Uint8ClampedArray(data)
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4
+      let br = 0, bg = 0, bb = 0, samples = 0
+      for (let dy = -1; dy <= 1; dy++) {
+        const sy = y + dy
+        if (sy < 0 || sy >= h) continue
+        for (let dx = -1; dx <= 1; dx++) {
+          const sx = x + dx
+          if (sx < 0 || sx >= w) continue
+          const bi = (sy * w + sx) * 4
+          br += data[bi]
+          bg += data[bi + 1]
+          bb += data[bi + 2]
+          samples++
+        }
+      }
+      br /= samples
+      bg /= samples
+      bb /= samples
+      out[i] = clampByte(data[i] + (data[i] - br) * amount)
+      out[i + 1] = clampByte(data[i + 1] + (data[i + 1] - bg) * amount)
+      out[i + 2] = clampByte(data[i + 2] + (data[i + 2] - bb) * amount)
+      out[i + 3] = 255
+    }
+  }
+  return out
+}
+
+function averageColor(colors) {
+  let r = 0, g = 0, b = 0, count = 0
+  for (const c of colors) {
+    r += c[0]
+    g += c[1]
+    b += c[2]
+    count++
+  }
+  return [Math.round(r / count), Math.round(g / count), Math.round(b / count)]
+}
+
+function splitColorBox(colors) {
+  let minR = 255, minG = 255, minB = 255
+  let maxR = 0, maxG = 0, maxB = 0
+  for (const c of colors) {
+    minR = Math.min(minR, c[0]); maxR = Math.max(maxR, c[0])
+    minG = Math.min(minG, c[1]); maxG = Math.max(maxG, c[1])
+    minB = Math.min(minB, c[2]); maxB = Math.max(maxB, c[2])
+  }
+  const ranges = [maxR - minR, maxG - minG, maxB - minB]
+  const channel = ranges.indexOf(Math.max(...ranges))
+  const sorted = [...colors].sort((a, b) => a[channel] - b[channel])
+  const mid = Math.max(1, Math.floor(sorted.length / 2))
+  return [sorted.slice(0, mid), sorted.slice(mid)]
+}
+
+function buildMedianCutPalette(data, maxColors) {
+  let boxes = [[]]
+  for (let i = 0; i < data.length; i += 4) boxes[0].push([data[i], data[i + 1], data[i + 2]])
+
+  while (boxes.length < maxColors) {
+    boxes.sort((a, b) => b.length - a.length)
+    const box = boxes.shift()
+    if (!box || box.length <= 1) {
+      if (box) boxes.push(box)
+      break
+    }
+    const [a, b] = splitColorBox(box)
+    boxes.push(a, b)
+  }
+
+  return boxes.filter(box => box.length > 0).map(averageColor)
+}
+
+function nearestPaletteColor(r, g, b, palette) {
+  let best = palette[0]
+  let bestDist = Number.POSITIVE_INFINITY
+  for (const c of palette) {
+    const dr = r - c[0]
+    const dg = g - c[1]
+    const db = b - c[2]
+    const dist = dr * dr + dg * dg + db * db
+    if (dist < bestDist) {
+      bestDist = dist
+      best = c
+    }
+  }
+  return best
+}
+
+function quantizePixels(data, maxColors = MAX_TILE_COLORS) {
+  const palette = buildMedianCutPalette(data, maxColors)
+  const out = new Uint8ClampedArray(data)
+  for (let i = 0; i < out.length; i += 4) {
+    const c = nearestPaletteColor(out[i], out[i + 1], out[i + 2], palette)
+    out[i] = c[0]
+    out[i + 1] = c[1]
+    out[i + 2] = c[2]
+    out[i + 3] = 255
+  }
+  return { data: out, palette, colorCount: new Set(palette.map(c => c.join(','))).size }
+}
+
+export function measureSeamScore(data, w, h) {
+  let total = 0
+  let samples = 0
+  for (let x = 0; x < w; x++) {
+    const top = x * 4
+    const bottom = ((h - 1) * w + x) * 4
+    total += Math.abs(data[top] - data[bottom])
+      + Math.abs(data[top + 1] - data[bottom + 1])
+      + Math.abs(data[top + 2] - data[bottom + 2])
+    samples += 3
+  }
+  for (let y = 0; y < h; y++) {
+    const left = (y * w) * 4
+    const right = (y * w + w - 1) * 4
+    total += Math.abs(data[left] - data[right])
+      + Math.abs(data[left + 1] - data[right + 1])
+      + Math.abs(data[left + 2] - data[right + 2])
+    samples += 3
+  }
+  return samples ? Number((total / samples).toFixed(2)) : 0
+}
+
+function repairSeams(data, w, h, palette = null) {
+  const out = new Uint8ClampedArray(data)
+  for (let x = 0; x < w; x++) {
+    const top = x * 4
+    const bottom = ((h - 1) * w + x) * 4
+    const snapped = palette
+      ? nearestPaletteColor(
+          Math.round((out[top] + out[bottom]) / 2),
+          Math.round((out[top + 1] + out[bottom + 1]) / 2),
+          Math.round((out[top + 2] + out[bottom + 2]) / 2),
+          palette,
+        )
+      : null
+    for (let c = 0; c < 3; c++) {
+      const avg = snapped ? snapped[c] : Math.round((out[top + c] + out[bottom + c]) / 2)
+      out[top + c] = avg
+      out[bottom + c] = avg
+    }
+    out[top + 3] = 255
+    out[bottom + 3] = 255
+  }
+  for (let y = 0; y < h; y++) {
+    const left = (y * w) * 4
+    const right = (y * w + w - 1) * 4
+    const snapped = palette
+      ? nearestPaletteColor(
+          Math.round((out[left] + out[right]) / 2),
+          Math.round((out[left + 1] + out[right + 1]) / 2),
+          Math.round((out[left + 2] + out[right + 2]) / 2),
+          palette,
+        )
+      : null
+    for (let c = 0; c < 3; c++) {
+      const avg = snapped ? snapped[c] : Math.round((out[left + c] + out[right + c]) / 2)
+      out[left + c] = avg
+      out[right + c] = avg
+    }
+    out[left + 3] = 255
+    out[right + 3] = 255
+  }
+  return out
+}
+
+export function postprocessTilePixels(rawPixels, rawWidth, rawHeight, tileSize, {
+  maxColors = MAX_TILE_COLORS,
+} = {}) {
+  let pixels = resizeRgbaArea(rawPixels, rawWidth, rawHeight, tileSize, tileSize)
+  for (let i = 0; i < pixels.length; i += 4) pixels[i + 3] = 255
+  pixels = sharpenPixels(pixels, tileSize, tileSize)
+  pixels = repairSeams(pixels, tileSize, tileSize)
+  const quantized = quantizePixels(pixels, Math.max(8, Math.min(12, maxColors)))
+  pixels = repairSeams(quantized.data, tileSize, tileSize, quantized.palette)
+  const colorCount = new Set(Array.from({ length: pixels.length / 4 }, (_, idx) => {
+    const i = idx * 4
+    return `${pixels[i]},${pixels[i + 1]},${pixels[i + 2]}`
+  })).size
+
+  return {
+    pixels,
+    meta: {
+      seamScore: measureSeamScore(pixels, tileSize, tileSize),
+      colorCount,
+    },
+  }
+}
+
+export async function generateBaseTileWithAI({
+  prompt,
+  model = DEFAULT_IMAGE_MODEL,
+  tileSize,
+  quality = DEFAULT_QUALITY,
+  outputFormat = DEFAULT_OUTPUT_FORMAT,
+  role = 'center',
+  paletteHint = null,
+  contextPrompt = '',
+}) {
+  if (!prompt || !prompt.trim()) throw new Error('Enter a prompt describing the tile.')
+
+  const finalPrompt = buildTilePrompt({ subject: prompt, role, tileSize, paletteHint, contextPrompt })
+  const decoded = await generateImage({ prompt: finalPrompt, model, quality, outputFormat })
+  const processed = postprocessTilePixels(decoded.data, decoded.width, decoded.height, tileSize)
+
+  return {
+    pixels: processed.pixels,
+    rawPixels: decoded.data,
+    meta: {
+      ...decoded.meta,
+      role,
+      prompt: finalPrompt,
+      rawSize: `${decoded.width}x${decoded.height}`,
+      tileSize,
+      seamScore: processed.meta.seamScore,
+      colorCount: processed.meta.colorCount,
+    },
+  }
 }

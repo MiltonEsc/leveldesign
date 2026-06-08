@@ -1,6 +1,8 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useReducer } from 'react'
 import { createGrid } from '../core/autotile.js'
 import { GENERATORS } from '../core/levelGenerator.js'
+
+const HISTORY_LIMIT = 60
 
 let _lid = 0
 function makeLayer(name, w, h, tileset = null, kind = 'autotile') {
@@ -28,11 +30,46 @@ export function useLevelMap(initialW = 32, initialH = 20) {
   const hRef  = useRef(initialH)
   const aiRef = useRef(0)
   const lRef  = useRef(layers)
+  const ppRef = useRef(placedProps)
+  const seRef = useRef(seamlessEdges)
 
   wRef.current  = width
   hRef.current  = height
   aiRef.current = activeLayerIdx
+  ppRef.current = placedProps
+  seRef.current = seamlessEdges
   if (lRef.current !== layers) lRef.current = layers
+
+  // ── Undo/redo history ──────────────────────────────────────────────────────
+  // Snapshots reference the (immutable) committed state — every mutation already
+  // produces fresh arrays/objects, so storing references is correct without deep
+  // cloning. One entry per logical op: a drag = one entry (captured at stroke
+  // start, pushed on first real change); one-shot ops push before mutating.
+  const undoStack = useRef([])
+  const redoStack = useRef([])
+  const [, bumpHistory] = useReducer(v => v + 1, 0)
+
+  const snapshot = useCallback(() => ({
+    width: wRef.current,
+    height: hRef.current,
+    layers: lRef.current,
+    placedProps: ppRef.current,
+    seamlessEdges: seRef.current,
+    activeLayerIdx: aiRef.current,
+  }), [])
+
+  const pushHistory = useCallback((snap) => {
+    undoStack.current.push(snap)
+    if (undoStack.current.length > HISTORY_LIMIT) undoStack.current.shift()
+    redoStack.current = []
+    bumpHistory()
+  }, [])
+
+  const resetHistory = useCallback(() => {
+    undoStack.current = []
+    redoStack.current = []
+    bumpHistory()
+  }, [])
 
   // ── RAF-batched stroke buffer ──────────────────────────────────────────────
   // Paint operations write here instead of calling setLayers on every mousemove.
@@ -72,6 +109,37 @@ export function useLevelMap(initialW = 32, initialH = 20) {
     strokeBuf.current = null
   }, [])
 
+  // Restores a snapshot. Dirty-cell hints are stripped so LevelCanvas re-diffs
+  // the whole grid (the hints describe the snapshot's original edit, not the
+  // difference from whatever is currently on screen).
+  const restore = useCallback((snap) => {
+    discardStrokeBuffer()
+    setWidth(snap.width)
+    setHeight(snap.height)
+    setLayers(snap.layers.map(l => (l._dirtyTerrain || l._dirtyManual)
+      ? { ...l, _dirtyTerrain: null, _dirtyManual: null }
+      : l))
+    setPlacedProps(snap.placedProps)
+    setSeamlessEdges(snap.seamlessEdges)
+    setActiveLayerIdx(Math.min(snap.activeLayerIdx, snap.layers.length - 1))
+  }, [discardStrokeBuffer])
+
+  const undo = useCallback(() => {
+    if (!undoStack.current.length) return
+    discardStrokeBuffer()
+    redoStack.current.push(snapshot())
+    restore(undoStack.current.pop())
+    bumpHistory()
+  }, [discardStrokeBuffer, snapshot, restore])
+
+  const redo = useCallback(() => {
+    if (!redoStack.current.length) return
+    discardStrokeBuffer()
+    undoStack.current.push(snapshot())
+    restore(redoStack.current.pop())
+    bumpHistory()
+  }, [discardStrokeBuffer, snapshot, restore])
+
   // Returns the mutable grid buffer for the active layer (lazy-init).
   const ensureGridBuf = useCallback((layerIdx) => {
     if (strokeBuf.current?.layerIdx !== layerIdx) {
@@ -82,10 +150,22 @@ export function useLevelMap(initialW = 32, initialH = 20) {
         manualTiles: undefined,
         dirtyTerrain: new Set(),
         dirtyManual: new Set(),
+        preSnap: snapshot(),
+        histPushed: false,
       }
     }
     return strokeBuf.current.grid
-  }, [])
+  }, [snapshot])
+
+  // Pushes the pre-stroke snapshot the first time a drag actually changes a
+  // cell, so an empty stroke leaves no history and a drag is a single entry.
+  const noteStrokeChange = useCallback(() => {
+    const buf = strokeBuf.current
+    if (buf && !buf.histPushed) {
+      pushHistory(buf.preSnap)
+      buf.histPushed = true
+    }
+  }, [pushHistory])
 
   // Called on mouseup to commit remaining paint immediately (no frame delay).
   const endStroke = useCallback(() => {
@@ -96,24 +176,24 @@ export function useLevelMap(initialW = 32, initialH = 20) {
   // ── One-shot patch (for fill/rect/generate/clear — not during drag) ────────
   const patchActive = useCallback((patchFn) => {
     discardStrokeBuffer()
-    setLayers(prev => {
-      const idx = aiRef.current
-      const layer = prev[idx]
-      if (!layer) return prev
-      const patch = patchFn(layer)
-      if (!patch) return prev
-      return prev.map((l, i) => i === idx ? {
-        ...l,
-        _dirtyTerrain: null,
-        _dirtyManual: null,
-        ...patch,
-      } : l)
-    })
-  }, [discardStrokeBuffer])
+    const idx = aiRef.current
+    const layer = lRef.current[idx]
+    if (!layer) return
+    const patch = patchFn(layer)
+    if (!patch) return
+    pushHistory(snapshot())
+    setLayers(prev => prev.map((l, i) => i === idx ? {
+      ...l,
+      _dirtyTerrain: null,
+      _dirtyManual: null,
+      ...patch,
+    } : l))
+  }, [discardStrokeBuffer, pushHistory, snapshot])
 
   // ── Layer CRUD ─────────────────────────────────────────────────────────────
   const addLayer = useCallback((tileset = null, kind = 'autotile') => {
     discardStrokeBuffer()
+    pushHistory(snapshot())
     const newIdx = lRef.current.length
     setLayers(prev => {
       const w = wRef.current, h = hRef.current
@@ -121,18 +201,21 @@ export function useLevelMap(initialW = 32, initialH = 20) {
       return [...prev, makeLayer(`${label} ${prev.length + 1}`, w, h, tileset, kind)]
     })
     setActiveLayerIdx(newIdx)
-  }, [discardStrokeBuffer])
+  }, [discardStrokeBuffer, pushHistory, snapshot])
 
   const removeLayer = useCallback((idx) => {
+    if (lRef.current.length <= 1) return
     discardStrokeBuffer()
+    pushHistory(snapshot())
     setLayers(prev => prev.length <= 1 ? prev : prev.filter((_, i) => i !== idx))
     setActiveLayerIdx(prev => (prev >= idx && prev > 0) ? prev - 1 : prev)
-  }, [discardStrokeBuffer])
+  }, [discardStrokeBuffer, pushHistory, snapshot])
 
   const moveLayer = useCallback((idx, direction) => {
     const nextIdx = idx + direction
     if (nextIdx < 0 || nextIdx >= lRef.current.length) return
     discardStrokeBuffer()
+    pushHistory(snapshot())
     setLayers(prev => {
       if (idx < 0 || idx >= prev.length || nextIdx < 0 || nextIdx >= prev.length) return prev
       const next = [...prev]
@@ -144,7 +227,7 @@ export function useLevelMap(initialW = 32, initialH = 20) {
       if (prev === nextIdx) return idx
       return prev
     })
-  }, [discardStrokeBuffer])
+  }, [discardStrokeBuffer, pushHistory, snapshot])
 
   const setLayerProp = useCallback((idx, props) => {
     setLayers(prev => prev.map((l, i) => i === idx ? { ...l, ...props } : l))
@@ -171,8 +254,8 @@ export function useLevelMap(initialW = 32, initialH = 20) {
         changed = true
       }
     }
-    if (changed) scheduleFlush()
-  }, [ensureGridBuf, scheduleFlush])
+    if (changed) { noteStrokeChange(); scheduleFlush() }
+  }, [ensureGridBuf, scheduleFlush, noteStrokeChange])
 
   const fillAt = useCallback((cx, cy, value) => {
     const w = wRef.current, h = hRef.current
@@ -249,8 +332,8 @@ export function useLevelMap(initialW = 32, initialH = 20) {
         changed = true
       }
     }
-    if (changed) scheduleFlush()
-  }, [ensureManualBuf, scheduleFlush])
+    if (changed) { noteStrokeChange(); scheduleFlush() }
+  }, [ensureManualBuf, scheduleFlush, noteStrokeChange])
 
   const fillManualAt = useCallback((cx, cy, tileIndex) => {
     const w = wRef.current, h = hRef.current
@@ -349,6 +432,7 @@ export function useLevelMap(initialW = 32, initialH = 20) {
   // ── Resize (all layers) ────────────────────────────────────────────────────
   const resize = useCallback((w, h) => {
     discardStrokeBuffer()
+    pushHistory(snapshot())
     const oldW = wRef.current, oldH = hRef.current
     setWidth(w); setHeight(h)
     setLayers(prev => prev.map(layer => {
@@ -363,15 +447,24 @@ export function useLevelMap(initialW = 32, initialH = 20) {
       }
       return { ...layer, grid: nextGrid, manualTiles: nextMT }
     }))
-  }, [discardStrokeBuffer])
+  }, [discardStrokeBuffer, pushHistory, snapshot])
 
   // ── Props ──────────────────────────────────────────────────────────────────
   const addProp = useCallback((assetId, x, y) => {
+    pushHistory(snapshot())
     const id = crypto?.randomUUID?.() ?? String(Date.now() + Math.random())
     setPlacedProps(prev => [...prev, { id, assetId, x, y }])
-  }, [])
-  const removeProp = useCallback((id) => setPlacedProps(prev => prev.filter(p => p.id !== id)), [])
-  const clearProps = useCallback(() => setPlacedProps([]), [])
+  }, [pushHistory, snapshot])
+  const removeProp = useCallback((id) => {
+    if (!ppRef.current.some(p => p.id === id)) return
+    pushHistory(snapshot())
+    setPlacedProps(prev => prev.filter(p => p.id !== id))
+  }, [pushHistory, snapshot])
+  const clearProps = useCallback(() => {
+    if (!ppRef.current.length) return
+    pushHistory(snapshot())
+    setPlacedProps([])
+  }, [pushHistory, snapshot])
 
   // ── Load saved level ───────────────────────────────────────────────────────
   const loadState = useCallback(({ width: w, height: h, layers: ls, placedProps: pp }) => {
@@ -380,7 +473,8 @@ export function useLevelMap(initialW = 32, initialH = 20) {
     setLayers(Array.isArray(ls) && ls.length > 0 ? ls : [makeLayer('Layer 1', w, h)])
     setActiveLayerIdx(0)
     setPlacedProps(Array.isArray(pp) ? pp : [])
-  }, [discardStrokeBuffer])
+    resetHistory()
+  }, [discardStrokeBuffer, resetHistory])
 
   return {
     width, height,
@@ -394,5 +488,8 @@ export function useLevelMap(initialW = 32, initialH = 20) {
     clearManualTiles, clearManualArea, clearManualFill, clearManualRect, fillManualAll,
     placedProps, addProp, removeProp, clearProps,
     loadState,
+    undo, redo,
+    canUndo: undoStack.current.length > 0,
+    canRedo: redoStack.current.length > 0,
   }
 }

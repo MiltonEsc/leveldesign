@@ -1,12 +1,15 @@
 /* @refresh reset */
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react'
 import { PixIcon }   from './components/ui/PixIcon.jsx'
 import { Segmented } from './components/ui/Segmented.jsx'
 import { ICONS }     from './components/ui/icons.js'
 import { EditorWorkspace } from './components/Editor/EditorWorkspace.jsx'
-import { AssetsView }      from './components/Assets/AssetsView.jsx'
-import { LevelsWorkspace } from './components/Level/LevelsWorkspace.jsx'
 import { GalleryDock }     from './components/BiomeGallery/GalleryDock.jsx'
+
+// Editor is the landing view (eager). The Levels view drags in pixi.js (the
+// bulk of the bundle) and Assets is secondary — load both on demand.
+const LevelsWorkspace = lazy(() => import('./components/Level/LevelsWorkspace.jsx').then(m => ({ default: m.LevelsWorkspace })))
+const AssetsView = lazy(() => import('./components/Assets/AssetsView.jsx').then(m => ({ default: m.AssetsView })))
 import { useDrawingCanvas } from './hooks/useDrawingCanvas.js'
 import { useTilesheet }     from './hooks/useTilesheet.js'
 import { useLevelMap }      from './hooks/useLevelMap.js'
@@ -274,6 +277,7 @@ export default function App() {
   }, [level.width, level.height, setCellPx])
 
   const [aiTextures, setAiTextures] = useState(null)
+  const [drawAiMeta, setDrawAiMeta] = useState(null)
 
   useEffect(() => {
     tilesheet.generateFromBiome({ ...BIOMES[0], colors: cloneColors(BIOMES[0].colors) }, tileSize)
@@ -331,6 +335,7 @@ export default function App() {
       colors: cloneColors(fresh.colors),
     })
     setAiTextures(null)
+    setDrawAiMeta(null)
     tilesheet.generateFromBiome(fresh, tileSize)
   }, [tileSize, tilesheet])
 
@@ -371,13 +376,28 @@ export default function App() {
     }))
   }, [])
 
-  const handleAIProcedural = useCallback((centerPixels, edgePixels) => {
+  const handleAITile = useCallback((pixels, result) => {
+    drawing.loadPixels(pixels)
+    setDrawAiMeta(result?.meta ? { base: result.meta } : null)
+    setEditorTileset(prev => ({
+      ...prev,
+      savedId: null,
+      isCustom: true,
+    }))
+  }, [drawing])
+
+  const handleAIProcedural = useCallback((centerPixels, edgePixels, result) => {
     const center = new Uint8ClampedArray(centerPixels)
     const edge   = edgePixels ? new Uint8ClampedArray(edgePixels) : null
     const centerData = new ImageData(center, tileSize, tileSize)
     const edgeData   = edge ? new ImageData(edge, tileSize, tileSize) : null
     tilesheet.generateFromTextures(centerData, edgeData, tileSize, editorTileset.colors)
-    setAiTextures({ center, edge })
+    const ai = result ? {
+      center: result.center?.meta || null,
+      edge: result.edge?.meta || null,
+    } : null
+    setAiTextures({ center, edge, ai })
+    setDrawAiMeta(null)
     setEditorTileset(prev => ({
       ...prev,
       savedId: null,
@@ -390,8 +410,9 @@ export default function App() {
       biomeId: editorTileset.biomeId,
       label: editorTileset.name,
       colors: cloneColors(editorTileset.colors),
+      ai,
     })
-  }, [tileSize, tilesheet, editorTileset.colors])
+  }, [tileSize, tilesheet, editorTileset])
 
   const currentTilesetDefinition = useCallback(() => {
     if (mode === 'draw') return {
@@ -399,6 +420,7 @@ export default function App() {
       basePixels: bytesToBase64(drawing.committedPixels),
       label: editorTileset.name,
       colors: editorTileset.colors,
+      ...(drawAiMeta ? { ai: drawAiMeta } : {}),
     }
     if (aiTextures) return {
       mode: 'textures',
@@ -407,9 +429,10 @@ export default function App() {
       biomeId: editorTileset.biomeId,
       label: editorTileset.name,
       colors: editorTileset.colors,
+      ...(aiTextures.ai ? { ai: aiTextures.ai } : {}),
     }
     return { mode: 'procedural', biomeId: editorTileset.biomeId, label: editorTileset.name, colors: editorTileset.colors }
-  }, [mode, drawing.committedPixels, editorTileset, aiTextures])
+  }, [mode, drawing.committedPixels, editorTileset, aiTextures, drawAiMeta])
 
   // `generate` controls whether the 48-tile sheet is rendered here. The editor
   // tileset-load path passes false because the saved-tileset effect regenerates
@@ -437,7 +460,9 @@ export default function App() {
         basePixels: def.basePixels,
         label: def.label || 'Drawn tileset',
         colors: cloneColors(inferred),
+        ...(def.ai ? { ai: def.ai } : {}),
       })
+      setDrawAiMeta(def.ai || null)
       return bytes
     }
     if (def.mode === 'textures') {
@@ -464,11 +489,13 @@ export default function App() {
         label: def.label || base?.label || 'Custom textured',
         colors: cloneColors(def.colors || inferred),
       })
-      setAiTextures({ center, edge })
+      setAiTextures({ center, edge, ai: def.ai || null })
+      setDrawAiMeta(null)
       return null
     }
     setMode('procedural')
     setAiTextures(null)
+    setDrawAiMeta(null)
     const base = def.biomeId ? BIOME_MAP[def.biomeId] : null
     const inferred = def.colors || inferColorsFromTiles(tilesFromDefinition(def, size)) || BIOMES[0].colors
     const biome = {
@@ -736,6 +763,10 @@ export default function App() {
       assets={assets.assets}
       selectedAssetId={assets.selectedId}
       onSelectAsset={assets.select}
+      tilesetsLoading={tilesets.loading}
+      tilesetsError={tilesets.error}
+      propsLoading={assets.loading}
+      propsError={assets.error}
     />
   )
 
@@ -766,7 +797,7 @@ export default function App() {
             biome={editorTileset} onColorChange={handleColorChange}
             onResetColors={handleResetBiomeColors} onShuffleColors={handleShuffleBiomeColors}
             drawing={drawing} tiles={tilesheet.tiles}
-            onGenerate={handleGenerate} onAITile={drawing.loadPixels} onAIProcedural={handleAIProcedural}
+            onGenerate={handleGenerate} onAITile={handleAITile} onAIProcedural={handleAIProcedural}
             biomeId={editorTileset.biomeId} savedCount={tilesets.tilesets.length}
             editorKind={editorKind} setEditorKind={setEditorKind}
           />
@@ -776,13 +807,15 @@ export default function App() {
 
       {activeView === 'editor' && editorKind === 'prop' && (
         <>
-          <AssetsView tileSize={tileSize} gallery={assets} editorKind={editorKind} setEditorKind={setEditorKind} />
+          <Suspense fallback={<div className="level-empty">Loading…</div>}>
+            <AssetsView tileSize={tileSize} gallery={assets} editorKind={editorKind} setEditorKind={setEditorKind} />
+          </Suspense>
           {galleryDock}
         </>
       )}
 
       {activeView === 'level' && (
-        <>
+        <Suspense fallback={<div className="level-empty">Loading…</div>}>
           <LevelsWorkspace
             levelMode={levelMode} setLevelMode={setLevelMode}
             level={level} tiles={tilesheet.tiles} tileSize={tileSize}
@@ -802,9 +835,10 @@ export default function App() {
             onFillActiveLayer={handleFillActiveLayer} onClearActiveLayer={handleClearActiveLayer}
             onSurprise={handleSurprise}
             levels={levels.levels} onSaveLevel={handleSaveLevel} onLoadLevel={handleLoadLevel} onRemoveLevel={levels.remove}
+            levelsLoading={levels.loading} levelsError={levels.error}
           />
           {galleryDock}
-        </>
+        </Suspense>
       )}
     </div>
   )

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { bytesToBase64, base64ToBytes } from '../lib/serialize.js'
 import { listAssets, addAsset, removeAsset } from '../lib/db.js'
 
@@ -20,6 +20,8 @@ export function useAssets() {
   const [selectedId, setSelectedId] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const assetsRef = useRef(assets)
+  assetsRef.current = assets
 
   useEffect(() => {
     let cancelled = false
@@ -46,13 +48,22 @@ export function useAssets() {
 
   const remove = useCallback(async (id) => {
     setError('')
-    // optimistic
+    // Optimistic remove, with rollback if the server delete fails so the UI
+    // never claims something is gone while it still exists in the DB.
+    const index = assetsRef.current.findIndex(a => a.id === id)
+    if (index < 0) return
+    const removed = assetsRef.current[index]
     setAssets(prev => prev.filter(a => a.id !== id))
     setSelectedId(prev => (prev === id ? null : prev))
     try {
       await removeAsset(id)
     } catch (e) {
       setError(e.message)
+      setAssets(prev => {
+        const next = [...prev]
+        next.splice(Math.min(index, next.length), 0, removed)
+        return next
+      })
     }
   }, [])
 

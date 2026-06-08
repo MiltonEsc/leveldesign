@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, lazy, Suspense } from 'react'
 import { Segmented } from '../ui/Segmented.jsx'
 import { Section } from '../ui/Section.jsx'
 import { Btn } from '../ui/Btn.jsx'
@@ -6,10 +6,12 @@ import { ColorRow } from '../ui/ColorRow.jsx'
 import { PixIcon } from '../ui/PixIcon.jsx'
 import { ICONS } from '../ui/icons.js'
 import { AssetCanvas } from './AssetCanvas.jsx'
-import { AssetAIPanel } from './AssetAIPanel.jsx'
 import { SizeSelector } from './SizeSelector.jsx'
 import { AssetGallery } from './AssetGallery.jsx'
 import { useAssetEditor } from '../../hooks/useAssetEditor.js'
+
+// Loads the Gemini/OpenAI request code only when the Assets view is shown.
+const AssetAIPanel = lazy(() => import('./AssetAIPanel.jsx').then(m => ({ default: m.AssetAIPanel })))
 import { exportAsset, exportAllAssets } from '../../core/exportAsset.js'
 
 const ATOOLS = [
@@ -138,7 +140,9 @@ export function AssetsView({ tileSize, gallery, editorKind, setEditorKind }) {
           </Section>
 
           <Section title="Generate with AI" icon="spark">
-            <AssetAIPanel pxW={pxW} pxH={pxH} onGenerated={handleGenerated} />
+            <Suspense fallback={<div className="ai-hint">Loading AI…</div>}>
+              <AssetAIPanel pxW={pxW} pxH={pxH} onGenerated={handleGenerated} />
+            </Suspense>
           </Section>
         </div>
       </aside>
@@ -199,6 +203,7 @@ export function AssetsView({ tileSize, gallery, editorKind, setEditorKind }) {
             onSelect={gallery.select} onRemove={gallery.remove}
             onExport={(a) => exportAsset(a)} onExportAll={() => exportAllAssets(gallery.assets)}
             onLoadToEditor={handleLoadToEditor}
+            loading={gallery.loading} error={gallery.error}
           />
         </div>
       </aside>

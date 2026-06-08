@@ -5,6 +5,7 @@ import { Btn } from '../ui/Btn.jsx'
 import { LevelCanvas } from './LevelCanvas.jsx'
 import { computeIndexMap } from '../../core/autotile.js'
 import { composeNativeSheet } from '../../core/composeSheet.js'
+import { exportLevelTiled, exportLevelGodot, exportLevelUnity } from '../../core/exportLevel.js'
 import { GENERATORS } from '../../core/levelGenerator.js'
 import { PixIcon } from '../ui/PixIcon.jsx'
 import { ICONS } from '../ui/icons.js'
@@ -179,7 +180,7 @@ export function LevelsWorkspace({
   onTerrainStart, onTerrainContinue, onTerrainFill, onTerrainRect, onTerrainPick,
   onFillActiveLayer, onClearActiveLayer,
   onPlaceProp, onRemovePropAt, onSurprise,
-  levels, onSaveLevel, onLoadLevel, onRemoveLevel,
+  levels, onSaveLevel, onLoadLevel, onRemoveLevel, levelsLoading = false, levelsError = '',
 }) {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [saveName, setSaveName] = useState('')
@@ -189,6 +190,20 @@ export function LevelsWorkspace({
 
   const activeLayer = level.layers[level.activeLayerIdx] || null
   const activeLayerTile = layerTiles[level.activeLayerIdx] || null
+
+  // Global level undo/redo (Ctrl+Z / Ctrl+Y), ignored while typing in a field.
+  useEffect(() => {
+    const handleKey = (e) => {
+      if (!e.ctrlKey && !e.metaKey) return
+      const tag = e.target?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable) return
+      const key = e.key.toLowerCase()
+      if (key === 'z' && !e.shiftKey) { e.preventDefault(); level.undo() }
+      else if (key === 'y' || (key === 'z' && e.shiftKey)) { e.preventDefault(); level.redo() }
+    }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [level.undo, level.redo])
 
   const getCachedNativeSheet = useCallback((layerTile) => {
     if (!layerTile?.tiles?.length) return null
@@ -221,7 +236,10 @@ export function LevelsWorkspace({
   )
 
   const gridStyle = useMemo(() => ({
-    gridTemplateColumns: sidebarOpen ? '318px minmax(0,1fr) 308px' : '0 minmax(0,1fr) 308px',
+    // Two columns now: control panel + canvas. Export moved into the left panel
+    // so the level canvas spans the freed right column (and the whole width when
+    // the sidebar is hidden).
+    gridTemplateColumns: sidebarOpen ? '318px minmax(0,1fr)' : '0 minmax(0,1fr)',
   }), [sidebarOpen])
 
   const leftPanelStyle = useMemo(() => ({
@@ -272,6 +290,12 @@ export function LevelsWorkspace({
     link.click()
   }, [assetsById, getCachedIndexMap, getCachedNativeSheet, level, layerTiles, tileSize])
 
+  // Context passed to the engine-format exporters (Tiled / Godot / Unity).
+  const exportCtx = useMemo(
+    () => ({ level, layerTiles, tileSize, assetsById }),
+    [level, layerTiles, tileSize, assetsById]
+  )
+
   useEffect(() => {
     if (levelMode !== 'manual') return
     const cv = paletteRef.current
@@ -307,6 +331,11 @@ export function LevelsWorkspace({
     <div className="editor-grid" style={gridStyle}>
       <aside className="panel" style={leftPanelStyle}>
         <div className="panel-scroll">
+          <div className="sf-row" style={{ display: 'flex', gap: 6, padding: '12px 18px 0' }}>
+            <Btn size="sm" variant="outline" icon="undo" full onClick={level.undo} disabled={!level.canUndo}>Undo</Btn>
+            <Btn size="sm" variant="outline" icon="redo" full onClick={level.redo} disabled={!level.canRedo}>Redo</Btn>
+          </div>
+
           <Section title="Layers" icon="layers">
             <div className="sf-layer-board">
               <div className="sf-layer-list">
@@ -466,7 +495,11 @@ export function LevelsWorkspace({
               <input className="text-input" value={saveName} onChange={e => setSaveName(e.target.value)} placeholder="Level name" />
               <Btn variant="primary" size="sm" icon="save" onClick={() => { onSaveLevel(saveName.trim() || 'Level'); setSaveName('') }}>Save</Btn>
             </div>
-            {levels.length === 0 ? (
+            {levelsError ? (
+              <p className="hint lib-error">Cloud storage error: {levelsError}</p>
+            ) : levelsLoading ? (
+              <p className="hint">Loading saved levels…</p>
+            ) : levels.length === 0 ? (
               <p className="hint">No saved levels yet.</p>
             ) : (
               <div style={{ marginTop: 8 }}>
@@ -479,6 +512,20 @@ export function LevelsWorkspace({
                 ))}
               </div>
             )}
+          </Section>
+
+          <Section title="Export" icon="download">
+            <div className="export-info"><span>Output</span><b>{level.width * tileSize} x {level.height * tileSize}px</b></div>
+            <Btn variant="primary" icon="download" full style={{ marginTop: 10 }} onClick={exportLevelPNG}>Export level PNG</Btn>
+            <div className="sidebar-inline-label" style={{ marginTop: 10 }}>
+              <span className="brush-label">For game engines</span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <Btn size="sm" variant="outline" icon="download" full onClick={() => exportLevelTiled(exportCtx)}>Tiled (.tmj)</Btn>
+              <Btn size="sm" variant="outline" icon="download" full onClick={() => exportLevelGodot(exportCtx)}>Godot (.json + .gd)</Btn>
+              <Btn size="sm" variant="outline" icon="download" full onClick={() => exportLevelUnity(exportCtx)}>Unity (.json + .cs)</Btn>
+            </div>
+            <p className="hint">Engine exports download the map file, an importer script, and the tileset PNG(s) — keep them together. Prop placement is included; prop images are not.</p>
           </Section>
         </div>
       </aside>
@@ -524,15 +571,6 @@ export function LevelsWorkspace({
           <div className="level-empty">Generate a tileset first in the Editor view.</div>
         )}
       </section>
-
-      <aside className="panel">
-        <div className="panel-scroll">
-          <Section title="Export" icon="download">
-            <div className="export-info"><span>Output</span><b>{level.width * tileSize} x {level.height * tileSize}px</b></div>
-            <Btn variant="primary" icon="download" full style={{ marginTop: 10 }} onClick={exportLevelPNG}>Export level PNG</Btn>
-          </Section>
-        </div>
-      </aside>
     </div>
   )
 }

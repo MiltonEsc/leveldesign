@@ -1,14 +1,12 @@
 import { useState } from 'react'
-import { generateAssetWithAI, AI_MODELS } from '../../core/aiAsset.js'
-
-const LS_KEY = 'openai_api_key'
-const LS_MODEL = 'openai_image_model'
-const LS_QUALITY = 'openai_image_quality'
+import { generateAssetWithAI } from '../../core/aiAsset.js'
+import { useAIModel } from '../../hooks/useAIModel.js'
+import { STORAGE_KEYS } from '../../constants/storageKeys.js'
 
 const QUALITY_OPTIONS = [
-  { value: 'low',    label: 'Low',    desc: 'Fastest · cheapest' },
+  { value: 'low',    label: 'Low',    desc: 'Fastest / cheapest' },
   { value: 'medium', label: 'Medium', desc: 'Balanced' },
-  { value: 'high',   label: 'High',   desc: 'Best detail · slower' },
+  { value: 'high',   label: 'High',   desc: 'Best detail / slower' },
 ]
 
 const ASSET_PRESETS = [
@@ -20,43 +18,26 @@ const ASSET_PRESETS = [
   'bush', 'flower patch', 'hay bale',
 ]
 
-function loadKey() {
-  return localStorage.getItem(LS_KEY) || import.meta.env.VITE_OPENAI_API_KEY || ''
-}
-
 export function AssetAIPanel({ pxW, pxH, onGenerated }) {
   const [prompt, setPrompt] = useState('')
-  const [apiKey, setApiKey] = useState(loadKey)
-  const [model, setModel] = useState(() => localStorage.getItem(LS_MODEL) || 'gpt-image-1')
-  const [quality, setQuality] = useState(() => localStorage.getItem(LS_QUALITY) || 'low')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
+  const { model, setModel, loading, error, run, AI_MODELS } = useAIModel()
+  const [quality, setQuality] = useState(() => localStorage.getItem(STORAGE_KEYS.AI_IMAGE_QUALITY) || 'low')
 
-  const handleKeyChange = (v) => { setApiKey(v); localStorage.setItem(LS_KEY, v) }
-  const handleModelChange = (v) => { setModel(v); localStorage.setItem(LS_MODEL, v) }
-  const handleQualityChange = (v) => { setQuality(v); localStorage.setItem(LS_QUALITY, v) }
+  const handleQualityChange = (v) => { setQuality(v); localStorage.setItem(STORAGE_KEYS.AI_IMAGE_QUALITY, v) }
 
   const handleGenerate = async () => {
-    setError('')
-    setLoading(true)
-    try {
-      const pixels = await generateAssetWithAI({ prompt, apiKey, model, quality, pxW, pxH })
-      onGenerated(pixels)
-    } catch (e) {
-      setError(e.message || 'Generation failed.')
-    } finally {
-      setLoading(false)
-    }
+    const pixels = await run(() => generateAssetWithAI({ prompt, model, quality, pxW, pxH }))
+    if (pixels) onGenerated(pixels)
   }
 
   return (
     <div className="ai-panel generator-panel">
       <div className="sidebar-card-title">Asset prompt</div>
-      <div className="ai-hint">Generate a transparent prop at {pxW}×{pxH}px. Edit it with the drawing tools after generation.</div>
+      <div className="ai-hint">Generate a transparent prop at {pxW}x{pxH}px. Edit it with the drawing tools after generation.</div>
 
       <textarea
         className="ai-prompt generator-textarea"
-        placeholder="oak tree, wooden barrel, stone tower…"
+        placeholder="oak tree, wooden barrel, stone tower..."
         value={prompt}
         onChange={e => setPrompt(e.target.value)}
         rows={4}
@@ -79,7 +60,7 @@ export function AssetAIPanel({ pxW, pxH, onGenerated }) {
       <div className="sidebar-inline-label">
         <span className="brush-label">Model</span>
       </div>
-      <select className="ai-model" value={model} onChange={e => handleModelChange(e.target.value)} disabled={loading}>
+      <select className="ai-model" value={model} onChange={e => setModel(e.target.value)} disabled={loading}>
         {AI_MODELS.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
       </select>
 
@@ -100,21 +81,12 @@ export function AssetAIPanel({ pxW, pxH, onGenerated }) {
         ))}
       </div>
 
-      <input
-        className="ai-key"
-        type="password"
-        placeholder="OpenAI API key"
-        value={apiKey}
-        onChange={e => handleKeyChange(e.target.value)}
-        disabled={loading}
-      />
-
       <button
         className="ai-generate-btn generator-submit-btn"
         onClick={handleGenerate}
-        disabled={loading || !prompt.trim() || !apiKey}
+        disabled={loading || !prompt.trim()}
       >
-        {loading ? 'Generating…' : 'Generate Asset'}
+        {loading ? 'Generating...' : 'Generate Asset'}
       </button>
 
       {error && <div className="ai-error">{error}</div>}

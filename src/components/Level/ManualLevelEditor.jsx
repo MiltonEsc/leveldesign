@@ -6,6 +6,7 @@ import { PixIcon } from '../ui/PixIcon.jsx'
 import { ICONS } from '../ui/icons.js'
 import { Minimap } from './Minimap.jsx'
 import { composeNativeSheet } from '../../core/composeSheet.js'
+import { STORAGE_KEYS } from '../../constants/storageKeys.js'
 
 const MAP_PRESETS = [
   { label: 'S', name: 'Small',  w: 20, h: 13 },
@@ -14,7 +15,7 @@ const MAP_PRESETS = [
 ]
 const ZOOMS = [14, 20, 28, 40]
 const TILE_COLS = 8, TILE_ROWS = 6
-const STORE_KEY = 'ts_manual_level_v1'
+const STORE_KEY = STORAGE_KEYS.MANUAL_LEVEL
 
 const TOOLS = [
   { id: 'brush',  icon: 'brush',  label: 'Brush',  key: 'B' },

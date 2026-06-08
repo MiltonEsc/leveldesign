@@ -280,6 +280,7 @@ textarea.text-input { resize: vertical; font-family: var(--ui); }
 .lib-card-foot-meta { display: flex; align-items: center; gap: 6px; }
 .lib-card-size { font-family: var(--mono); font-size: 10px; color: var(--ink-dim); }
 .lib-empty { color: var(--ink-faint); font-size: 13px; padding: 24px; }
+.lib-error, .asset-gallery-error { color: var(--danger); }
 
 /* ── Toast ──────────────────────────────────────────────────────────────── */
 .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
