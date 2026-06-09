@@ -79,6 +79,29 @@ test('postprocessTilePixels returns opaque limited-color seamless pixels', () =>
   for (let i = 3; i < result.pixels.length; i += 4) assert.equal(result.pixels[i], 255)
 })
 
+test('image-q dithering stays in-palette, opaque, and changes the result vs none', () => {
+  const w = 16, h = 16
+  const raw = new Uint8ClampedArray(w * h * 4)
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4
+      raw[i] = (x * 12) % 256          // smooth horizontal gradient → dithering shows
+      raw[i + 1] = (y * 12) % 256
+      raw[i + 2] = ((x + y) * 6) % 256
+      raw[i + 3] = 255
+    }
+  }
+  const none = aiTile.postprocessTilePixels(raw, w, h, 16, { dither: 'nearest' })
+  const fs = aiTile.postprocessTilePixels(raw, w, h, 16, { dither: 'floyd-steinberg' })
+
+  assert.ok(fs.meta.colorCount <= 12)
+  for (let i = 3; i < fs.pixels.length; i += 4) assert.equal(fs.pixels[i], 255)
+  // Dithering must actually alter the pixels relative to plain nearest.
+  let differs = false
+  for (let i = 0; i < fs.pixels.length; i++) if (fs.pixels[i] !== none.pixels[i]) { differs = true; break }
+  assert.ok(differs)
+})
+
 test('AI texture composition still creates 48 tiles for all supported grid sizes', () => {
   for (const size of [8, 16, 32, 64]) {
     const center = new Uint8ClampedArray(size * size * 4)

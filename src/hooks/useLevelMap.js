@@ -450,10 +450,18 @@ export function useLevelMap(initialW = 32, initialH = 20) {
   }, [discardStrokeBuffer, pushHistory, snapshot])
 
   // ── Props ──────────────────────────────────────────────────────────────────
-  const addProp = useCallback((assetId, x, y) => {
+  // `transform` is optional { flipX, flipY, rotation }; only non-default fields
+  // are stored so older props (no transform) stay clean and back-compatible.
+  const addProp = useCallback((assetId, x, y, transform = null) => {
     pushHistory(snapshot())
     const id = crypto?.randomUUID?.() ?? String(Date.now() + Math.random())
-    setPlacedProps(prev => [...prev, { id, assetId, x, y }])
+    const t = transform || {}
+    setPlacedProps(prev => [...prev, {
+      id, assetId, x, y,
+      ...(t.flipX ? { flipX: true } : {}),
+      ...(t.flipY ? { flipY: true } : {}),
+      ...(t.rotation ? { rotation: t.rotation } : {}),
+    }])
   }, [pushHistory, snapshot])
   const removeProp = useCallback((id) => {
     if (!ppRef.current.some(p => p.id === id)) return

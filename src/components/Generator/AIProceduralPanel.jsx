@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { generateBaseTileWithAI } from '../../core/aiTile.js'
+import { generateBaseTileWithAI, DITHER_OPTIONS } from '../../core/aiTile.js'
 import { useAIModel } from '../../hooks/useAIModel.js'
 
 const TEXTURE_PRESETS = [
@@ -26,7 +26,8 @@ const TEXTURE_PRESETS = [
 export function AIProceduralPanel({ tileSize, paletteHint, onGenerated }) {
   const [center, setCenter] = useState('')
   const [border, setBorder] = useState('')
-  const { model, setModel, loading, error, run, AI_MODELS } = useAIModel()
+  const [dither, setDither] = useState(DITHER_OPTIONS[0].value)
+  const { model, setModel, loading, error, run, models } = useAIModel()
 
   const handleGenerate = async () => {
     const result = await run(async () => {
@@ -36,6 +37,7 @@ export function AIProceduralPanel({ tileSize, paletteHint, onGenerated }) {
         tileSize,
         role: 'center',
         paletteHint,
+        dither,
       })
       let edgeResult = null
       if (border.trim()) {
@@ -46,6 +48,7 @@ export function AIProceduralPanel({ tileSize, paletteHint, onGenerated }) {
           role: 'edge',
           paletteHint,
           contextPrompt: center,
+          dither,
         })
       }
       return { centerResult, edgeResult }
@@ -96,7 +99,10 @@ export function AIProceduralPanel({ tileSize, paletteHint, onGenerated }) {
       />
 
       <select className="ai-model" value={model} onChange={e => setModel(e.target.value)} disabled={loading}>
-        {AI_MODELS.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+        {models.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+      </select>
+      <select className="ai-model" value={dither} onChange={e => setDither(e.target.value)} disabled={loading} title="Dithering">
+        {DITHER_OPTIONS.map(d => <option key={d.value} value={d.value}>Dither: {d.label}</option>)}
       </select>
 
       <button className="ai-generate-btn" onClick={handleGenerate} disabled={loading || !center.trim()}>

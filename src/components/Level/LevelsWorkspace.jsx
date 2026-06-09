@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react'
 import { Segmented } from '../ui/Segmented.jsx'
 import { Section } from '../ui/Section.jsx'
 import { Btn } from '../ui/Btn.jsx'
@@ -6,9 +6,14 @@ import { LevelCanvas } from './LevelCanvas.jsx'
 import { computeIndexMap } from '../../core/autotile.js'
 import { composeNativeSheet } from '../../core/composeSheet.js'
 import { exportLevelTiled, exportLevelGodot, exportLevelUnity } from '../../core/exportLevel.js'
-import { GENERATORS } from '../../core/levelGenerator.js'
+import { FILL_INDEX, makeFillVariants, pickVariant } from '../../core/tileVariants.js'
+import { GeneratePanel } from './GeneratePanel.jsx'
 import { PixIcon } from '../ui/PixIcon.jsx'
 import { ICONS } from '../ui/icons.js'
+
+// The AI idea assistant pulls in the text-generation code; load it only when the
+// (collapsed-by-default) "AI ideas" section is opened.
+const LevelIdeaPanel = lazy(() => import('./LevelIdeaPanel.jsx').then(m => ({ default: m.LevelIdeaPanel })))
 
 const SIZE_PRESETS = [
   { label: 'S', w: 24, h: 16 },
@@ -176,11 +181,14 @@ export function LevelsWorkspace({
   levelTool, setLevelTool, assets, assetsById, selectedAssetId, onSelectAsset,
   terrainTool, setTerrainTool, terrainBrushSize, setTerrainBrushSize,
   manualSelectedTile, setManualSelectedTile,
+  propTransform, setPropTransform,
   layerTiles,
   onTerrainStart, onTerrainContinue, onTerrainFill, onTerrainRect, onTerrainPick,
   onFillActiveLayer, onClearActiveLayer,
   onPlaceProp, onRemovePropAt, onSurprise,
   levels, onSaveLevel, onLoadLevel, onRemoveLevel, levelsLoading = false, levelsError = '',
+  onTileSizeChange, levelNotice = '',
+  tileVariation = false, setTileVariation,
 }) {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [saveName, setSaveName] = useState('')
@@ -261,6 +269,13 @@ export function LevelsWorkspace({
       const sheet = getCachedNativeSheet(layerTile)
       const exportIndexMap = getCachedIndexMap(layer.grid, level.width, level.height, level.seamlessEdges)
       if (!sheet) continue
+      // Fill-tile variants for this layer (anti-repetition), baked into the PNG.
+      const variantCanvases = (tileVariation ? makeFillVariants(layerTile.tiles[FILL_INDEX], ltSize) : []).map(v => {
+        const c = document.createElement('canvas')
+        c.width = ltSize; c.height = ltSize
+        c.getContext('2d').putImageData(v, 0, 0)
+        return c
+      })
       for (let y = 0; y < level.height; y++) {
         for (let x = 0; x < level.width; x++) {
           const cell = y * level.width + x
@@ -270,6 +285,13 @@ export function LevelsWorkspace({
             : (manualIdx >= 0 ? manualIdx : (exportIndexMap?.[cell] ?? 0))
           const isEmpty = layer.kind === 'manual' ? idx < 0 : !idx
           if (isEmpty) continue
+          if (variantCanvases.length && idx === FILL_INDEX) {
+            const pick = pickVariant(x, y, 1 + variantCanvases.length)
+            if (pick > 0) {
+              ctx.drawImage(variantCanvases[pick - 1], 0, 0, ltSize, ltSize, x * tileSize, y * tileSize, tileSize, tileSize)
+              continue
+            }
+          }
           const sx = (idx % 8) * ltSize
           const sy = Math.floor(idx / 8) * ltSize
           ctx.drawImage(sheet, sx, sy, ltSize, ltSize, x * tileSize, y * tileSize, tileSize, tileSize)
@@ -288,12 +310,12 @@ export function LevelsWorkspace({
     link.href = out.toDataURL('image/png')
     link.download = `level_${level.width}x${level.height}.png`
     link.click()
-  }, [assetsById, getCachedIndexMap, getCachedNativeSheet, level, layerTiles, tileSize])
+  }, [assetsById, getCachedIndexMap, getCachedNativeSheet, level, layerTiles, tileSize, tileVariation])
 
   // Context passed to the engine-format exporters (Tiled / Godot / Unity).
   const exportCtx = useMemo(
-    () => ({ level, layerTiles, tileSize, assetsById }),
-    [level, layerTiles, tileSize, assetsById]
+    () => ({ level, layerTiles, tileSize, assetsById, tileVariation }),
+    [level, layerTiles, tileSize, assetsById, tileVariation]
   )
 
   useEffect(() => {
@@ -419,6 +441,20 @@ export function LevelsWorkspace({
                     ))}
                   </div>
                 )}
+                <div className="sidebar-inline-label" style={{ marginTop: 8 }}>
+                  <span className="brush-label">Transform</span>
+                  <span className="tool-meta">{propTransform.rotation}°{propTransform.flipX ? ' H' : ''}{propTransform.flipY ? ' V' : ''}</span>
+                </div>
+                <div className="gen-mini-row">
+                  <button className={`gen-mini-btn ${propTransform.flipX ? 'on' : ''}`} title="Flip horizontal"
+                    onClick={() => setPropTransform(t => ({ ...t, flipX: !t.flipX }))}>Flip H</button>
+                  <button className={`gen-mini-btn ${propTransform.flipY ? 'on' : ''}`} title="Flip vertical"
+                    onClick={() => setPropTransform(t => ({ ...t, flipY: !t.flipY }))}>Flip V</button>
+                  <button className="gen-mini-btn" title="Rotate 90 degrees"
+                    onClick={() => setPropTransform(t => ({ ...t, rotation: (t.rotation + 90) % 360 }))}>Rotate</button>
+                  <button className="gen-mini-btn" title="Reset transform"
+                    onClick={() => setPropTransform({ flipX: false, flipY: false, rotation: 0 })}>Reset</button>
+                </div>
                 <Btn size="sm" variant="outline" icon="trash" full style={{ marginTop: 8 }}
                   onClick={level.clearProps} disabled={!level.placedProps.length}>
                   Clear props ({level.placedProps.length})
@@ -428,12 +464,17 @@ export function LevelsWorkspace({
           </Section>
 
           <Section title="Tileset" icon="image">
-            <p className="hint">
+            <div className="sidebar-inline-label">
+              <span className="brush-label">Tile size (paint px)</span>
+            </div>
+            <Segmented full size="sm" value={tileSize} onChange={onTileSizeChange}
+              options={[{ value: 8, label: '8' }, { value: 16, label: '16' }, { value: 32, label: '32' }, { value: 64, label: '64' }]} />
+            <p className="hint" style={{ marginTop: 8 }}>
               {activeLayer?.tileset
                 ? `Current tileset: ${activeLayer.tileset.name || 'custom'} · ${activeLayer.tileset.tileSize || tileSize}px`
                 : `Using the current editor tileset · ${tileSize}px`}
             </p>
-            <p className="hint">Select a biome or saved tileset from the gallery below to change the active layer material.</p>
+            <p className="hint">Pick a biome or saved tileset below. Saved tilesets must match the level tile size ({tileSize}px).</p>
           </Section>
 
           <Section title="Map size" icon="grid">
@@ -454,22 +495,16 @@ export function LevelsWorkspace({
           </Section>
 
           {levelMode === 'autotile' ? (
-            <Section title="Generate" icon="spark">
-              <div className="tool-grid">
-                {Object.entries(GENERATORS).map(([key, g]) => (
-                  <button key={key} className="tool-btn" onClick={() => level.generate(key)} title={g.label || key}>
-                    <span>{g.label || key}</span>
-                  </button>
-                ))}
-              </div>
-              <div className="row-btns">
-                <Btn size="sm" variant="accentSoft" icon="dice" full onClick={onSurprise}>Surprise</Btn>
-              </div>
-              <div className="row-btns">
-                <Btn size="sm" variant="outline" icon="grid" full onClick={level.fillAll}>Fill</Btn>
-                <Btn size="sm" variant="danger" icon="trash" full onClick={level.clear}>Clear</Btn>
-              </div>
-            </Section>
+            <>
+              <Section title="Generate" icon="spark">
+                <GeneratePanel level={level} onSurprise={onSurprise} />
+              </Section>
+              <Section title="AI ideas" icon="spark" defaultOpen={false}>
+                <Suspense fallback={<div className="ai-hint">Loading AI…</div>}>
+                  <LevelIdeaPanel level={level} />
+                </Suspense>
+              </Section>
+            </>
           ) : (
             <Section title="Manual actions" icon="layers">
               <div className="row-btns">
@@ -488,6 +523,11 @@ export function LevelsWorkspace({
               <span className="layer-name">Seamless edges</span>
               <input type="checkbox" checked={level.seamlessEdges} onChange={e => level.setSeamlessEdges(e.target.checked)} />
             </label>
+            <label className="lib-card-foot" style={{ padding: '6px 0', cursor: 'pointer' }}>
+              <span className="layer-name">Tile variation</span>
+              <input type="checkbox" checked={tileVariation} onChange={e => setTileVariation(e.target.checked)} />
+            </label>
+            <p className="hint">Breaks the repeating grid by varying the fill tile per cell (live view).</p>
           </Section>
 
           <Section title="Save / load level" icon="download" defaultOpen={false}>
@@ -534,9 +574,11 @@ export function LevelsWorkspace({
         <div className="level-status-bar">
           <span className="level-status-pill">Mode {levelMode}</span>
           <span className="level-status-pill">Map {level.width}x{level.height}</span>
+          <span className="level-status-pill">Tile {tileSize}px</span>
           <span className="level-status-pill">Zoom {cellPx}px</span>
           <span className="level-status-pill">Layer {activeLayer?.name || 'None'}</span>
           <span className="level-status-pill">Props {level.placedProps.length}</span>
+          {levelNotice && <span className="level-status-pill level-status-notice">{levelNotice}</span>}
         </div>
         <button className="sidebar-toggle" onClick={() => setSidebarOpen(o => !o)} title={sidebarOpen ? 'Hide panel' : 'Show panel'}>
           {sidebarOpen ? '<' : '>'}
@@ -564,6 +606,8 @@ export function LevelsWorkspace({
             placedProps={level.placedProps}
             assetsById={assetsById}
             selectedAssetId={selectedAssetId}
+            propTransform={propTransform}
+            tileVariation={tileVariation}
             onPlaceProp={onPlaceProp}
             onRemovePropAt={onRemovePropAt}
           />

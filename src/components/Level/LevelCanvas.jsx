@@ -1,8 +1,25 @@
 import { useRef, useEffect, useLayoutEffect, useCallback, useMemo, useState } from 'react'
+import { useGesture } from '@use-gesture/react'
 import { Application, Container, Rectangle, Sprite, Texture } from 'pixi.js'
 import { computeIndexMap, patchIndexMap, patchIndexMapFromCells } from '../../core/autotile.js'
 import { composeNativeSheet } from '../../core/composeSheet.js'
+import { FILL_INDEX, makeFillVariants, pickVariant } from '../../core/tileVariants.js'
 import { MIN_CELL_PX, MAX_CELL_PX, ZOOM_STEP } from './zoomConfig.js'
+
+const NO_TRANSFORM = { flipX: false, flipY: false, rotation: 0 }
+
+// Positions/scales/rotates a pixi prop sprite for its placement transform.
+// Uses a centered anchor so flip (negative scale) and rotation pivot in place.
+function applyPropTransform(sprite, placed, entry, tileSize) {
+  const tex = sprite.texture
+  const baseSx = (entry.cols * tileSize) / tex.width
+  const baseSy = (entry.rows * tileSize) / tex.height
+  sprite.anchor.set(0.5)
+  sprite.scale.set(baseSx * (placed.flipX ? -1 : 1), baseSy * (placed.flipY ? -1 : 1))
+  sprite.rotation = ((placed.rotation || 0) * Math.PI) / 180
+  sprite.x = (placed.x + entry.cols / 2) * tileSize
+  sprite.y = (placed.y + entry.rows / 2) * tileSize
+}
 
 function assetToCanvas(asset) {
   const pxW = asset.cols * asset.tileSize
@@ -20,6 +37,7 @@ export function LevelCanvas({
   onStartPaint, onContinuePaint, onEndPaint,
   terrainTool = 'brush', terrainBrushSize = 1, onFillTerrain, onRectTerrain, onPickTerrain,
   levelTool = 'terrain', placedProps = [], assetsById = {}, selectedAssetId = null,
+  propTransform = NO_TRANSFORM, tileVariation = false,
   onPlaceProp, onRemovePropAt,
 }) {
   const wrapperRef = useRef(null)
@@ -111,7 +129,17 @@ export function LevelCanvas({
       frame: new Rectangle((idx % 8) * sourceTileSize, Math.floor(idx / 8) * sourceTileSize, sourceTileSize, sourceTileSize),
     }))
 
-    const entry = { tileSize: sourceTileSize, textures, sheetTexture }
+    // Standalone textures for the fill-tile variants (anti-repetition). Always
+    // built (cheap, cached); whether they're used is the `tileVariation` toggle.
+    const fillVariantTextures = makeFillVariants(layerTile.tiles[FILL_INDEX], sourceTileSize).map(v => {
+      const c = document.createElement('canvas')
+      c.width = sourceTileSize
+      c.height = sourceTileSize
+      c.getContext('2d').putImageData(v, 0, 0)
+      return Texture.from(c, true)
+    })
+
+    const entry = { tileSize: sourceTileSize, textures, sheetTexture, fillVariantTextures }
     terrainTextureCache.current.set(layerTile, entry)
     return entry
   }, [tileSize])
@@ -191,6 +219,8 @@ export function LevelCanvas({
       layerStateCacheRef.current.delete(layerId)
     }
 
+    // One Container of width*height Sprites per layer; tiles update incrementally
+    // (only dirty cells swap texture). Reliable and efficient at these map sizes.
     const ensureLayerState = (layer, layerIdx) => {
       let state = layerStateCacheRef.current.get(layer.id)
       if (!state) {
@@ -250,9 +280,12 @@ export function LevelCanvas({
       if (!textureEntry) return
       const state = ensureLayerState(layer, layerIdx)
       const textures = textureEntry.textures
+      const variants = textureEntry.fillVariantTextures || []
+      const useVariants = tileVariation && variants.length > 0
       const fullRebuild = !state.indexMap
         || state.tileRef !== layerTile
         || state.border !== border
+        || state.variation !== useVariants
 
       let indexMap = state.indexMap
       let dirtyCells = []
@@ -296,17 +329,24 @@ export function LevelCanvas({
           sprite.texture = Texture.EMPTY
           continue
         }
-        sprite.texture = textures[idx] || Texture.EMPTY
+        // Anti-repetition: for fill cells, deterministically pick a variant.
+        let tex = textures[idx]
+        if (useVariants && idx === FILL_INDEX) {
+          const pick = pickVariant(cell % width, (cell / width) | 0, 1 + variants.length)
+          if (pick > 0) tex = variants[pick - 1]
+        }
+        sprite.texture = tex || Texture.EMPTY
         sprite.visible = true
       }
 
+      state.variation = useVariants
       state.indexMap = indexMap
       state.grid = layer.grid
       state.manualTiles = layer.manualTiles
       state.tileRef = layerTile
       state.border = border
     })
-  }, [pixiReady, layers, layerTiles, width, height, tileSize, seamlessEdges, getTerrainTextures])
+  }, [pixiReady, layers, layerTiles, width, height, tileSize, seamlessEdges, getTerrainTextures, tileVariation])
 
   useEffect(() => {
     if (!pixiReady || !propsContainerRef.current) return
@@ -331,10 +371,7 @@ export function LevelCanvas({
       } else if (sprite.texture !== entry.texture) {
         sprite.texture = entry.texture
       }
-      sprite.x = placed.x * tileSize
-      sprite.y = placed.y * tileSize
-      sprite.width = entry.cols * tileSize
-      sprite.height = entry.rows * tileSize
+      applyPropTransform(sprite, placed, entry, tileSize)
     }
 
     for (const [id, sprite] of cache) {
@@ -370,13 +407,21 @@ export function LevelCanvas({
       const entry = assetTextures[selectedAssetId]
       if (entry) {
         const [hx, hy] = hoverCell.current
+        const w = entry.cols * cellPx
+        const h = entry.rows * cellPx
         ctx.imageSmoothingEnabled = false
         ctx.globalAlpha = 0.55
-        ctx.drawImage(entry.texture.source.resource, hx * cellPx, hy * cellPx, entry.cols * cellPx, entry.rows * cellPx)
+        // Preview the placement transform (flip/rotation) around the footprint centre.
+        ctx.save()
+        ctx.translate(hx * cellPx + w / 2, hy * cellPx + h / 2)
+        ctx.rotate(((propTransform.rotation || 0) * Math.PI) / 180)
+        ctx.scale(propTransform.flipX ? -1 : 1, propTransform.flipY ? -1 : 1)
+        ctx.drawImage(entry.texture.source.resource, -w / 2, -h / 2, w, h)
+        ctx.restore()
         ctx.globalAlpha = 1
         ctx.strokeStyle = 'rgba(255,255,255,0.8)'
         ctx.lineWidth = 1
-        ctx.strokeRect(hx * cellPx + 0.5, hy * cellPx + 0.5, entry.cols * cellPx - 1, entry.rows * cellPx - 1)
+        ctx.strokeRect(hx * cellPx + 0.5, hy * cellPx + 0.5, w - 1, h - 1)
       }
     }
 
@@ -390,7 +435,7 @@ export function LevelCanvas({
       ctx.lineWidth = 2
       ctx.strokeRect(x0 * cellPx + 1, y0 * cellPx + 1, (x1 - x0 + 1) * cellPx - 2, (y1 - y0 + 1) * cellPx - 2)
     }
-  }, [width, height, cellPx, showGrid, levelTool, selectedAssetId, assetTextures, terrainTool])
+  }, [width, height, cellPx, showGrid, levelTool, selectedAssetId, assetTextures, terrainTool, propTransform])
 
   useEffect(() => { drawOverlay() }, [drawOverlay])
 
@@ -413,32 +458,46 @@ export function LevelCanvas({
     ]
   }, [cellPx])
 
-  const handleWheel = useCallback((e) => {
-    if (!setCellPx) return
-    e.preventDefault()
-    const dir = e.deltaY < 0 ? 1 : -1
-    const newCell = Math.max(MIN_CELL_PX, Math.min(MAX_CELL_PX, cellPx + dir * ZOOM_STEP))
-    if (newCell === cellPx) return
+  // Zoom to a target cell size, anchored at a client point so the cursor/pinch
+  // centre stays put (the useLayoutEffect above restores scroll from zoomAnchor).
+  // Reads cellPx from a ref so the gesture handlers never go stale.
+  const cellPxRef = useRef(cellPx)
+  cellPxRef.current = cellPx
+  const clampCell = (v) => Math.max(MIN_CELL_PX, Math.min(MAX_CELL_PX, v))
+  const zoomToCell = useCallback((newCell, clientX, clientY) => {
+    const cur = cellPxRef.current
+    if (newCell === cur || !wrapperRef.current) return
     const rect = wrapperRef.current.getBoundingClientRect()
     zoomAnchor.current = {
-      worldX: (e.clientX - rect.left) / cellPx,
-      worldY: (e.clientY - rect.top) / cellPx,
-      clientX: e.clientX,
-      clientY: e.clientY,
+      worldX: (clientX - rect.left) / cur,
+      worldY: (clientY - rect.top) / cur,
+      clientX,
+      clientY,
     }
     setCellPx(newCell)
-  }, [cellPx, setCellPx])
+  }, [setCellPx])
 
-  // React registers `onWheel` as a passive listener at the root, so calling
-  // preventDefault() there is ignored (and floods the console with warnings)
-  // while the container still scrolls during zoom. Attach a non-passive native
-  // wheel listener directly to the wrapper so preventDefault actually works.
-  useEffect(() => {
-    const el = wrapperRef.current
-    if (!el) return
-    el.addEventListener('wheel', handleWheel, { passive: false })
-    return () => el.removeEventListener('wheel', handleWheel)
-  }, [handleWheel])
+  // Pointer-agnostic zoom: mouse/trackpad wheel + touch/trackpad pinch. Bound on
+  // the wrapper with passive:false so preventDefault works (no console warnings).
+  useGesture(
+    {
+      onWheel: ({ event }) => {
+        if (!setCellPx) return
+        event.preventDefault()
+        const dir = event.deltaY < 0 ? 1 : -1
+        zoomToCell(clampCell(cellPxRef.current + dir * ZOOM_STEP), event.clientX, event.clientY)
+      },
+      onPinch: ({ da: [dist], origin: [ox, oy], first, memo }) => {
+        if (!setCellPx) return memo
+        if (first || !memo) return { startDist: dist || 1, startCell: cellPxRef.current }
+        const ratio = dist / memo.startDist
+        const target = clampCell(Math.round((memo.startCell * ratio) / ZOOM_STEP) * ZOOM_STEP)
+        zoomToCell(target, ox, oy)
+        return memo
+      },
+    },
+    { target: wrapperRef, eventOptions: { passive: false } },
+  )
 
   const handleDown = useCallback((e) => {
     e.preventDefault()
@@ -511,7 +570,8 @@ export function LevelCanvas({
     <div
       ref={wrapperRef}
       className="level-canvas-wrapper"
-      style={{ position: 'relative', width: displayW, height: displayH, cursor }}
+      // touchAction:none lets @use-gesture handle touch pinch-zoom on the canvas.
+      style={{ position: 'relative', width: displayW, height: displayH, cursor, touchAction: 'none' }}
       onMouseDown={handleDown}
       onMouseMove={handleMove}
       onMouseUp={handleUp}

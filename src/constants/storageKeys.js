@@ -7,6 +7,8 @@ export const STORAGE_KEYS = {
   AI_IMAGE_MODEL: 'ai_image_model',
   // Preferred AI image quality (Assets panel only, today).
   AI_IMAGE_QUALITY: 'ai_image_quality',
+  // Preferred AI text model (level idea assistant).
+  AI_TEXT_MODEL: 'ai_text_model',
   // Auto-saved manual level editor draft.
   MANUAL_LEVEL: 'ts_manual_level_v1',
 }

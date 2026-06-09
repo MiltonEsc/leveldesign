@@ -5,6 +5,13 @@ import react from '@vitejs/plugin-react'
 // The auth headers (x-goog-api-key / Authorization) are forwarded as-is.
 export default defineConfig({
   plugins: [react()],
+  // Pre-bundle deps that are only reached through lazy chunks, so Vite's dev
+  // optimizer doesn't re-bundle them mid-session (which serves a 2nd React copy
+  // → "Invalid hook call", or 504 "Outdated Optimize Dep" on the dynamic import).
+  // - react/react-dom + @use-gesture/react: dedupe React (LevelCanvas).
+  // - image-q: statically imported by aiTile.js, reached via the lazy AI panels.
+  resolve: { dedupe: ['react', 'react-dom'] },
+  optimizeDeps: { include: ['react', 'react-dom', '@use-gesture/react', 'image-q'] },
   build: {
     rollupOptions: {
       output: {

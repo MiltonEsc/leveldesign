@@ -8,13 +8,37 @@
 // images live in a separate atlas and are not exported here.
 import { computeIndexMap } from './autotile.js'
 import { composeNativeSheet, SHEET_COLS, SHEET_ROWS } from './composeSheet.js'
+import { FILL_INDEX, makeFillVariants, pickVariant } from './tileVariants.js'
 
 const TILE_COUNT = SHEET_COLS * SHEET_ROWS // 48
+
+// Builds the tileset sheet canvas, optionally with fill-tile variants appended as
+// extra tiles (indices 48..) so the baked level keeps its anti-repetition.
+function buildSheetCanvas(tiles, variants, tileSize) {
+  if (!variants.length) {
+    return { canvas: composeNativeSheet(tiles, tileSize), rows: SHEET_ROWS, tileCount: TILE_COUNT }
+  }
+  const total = TILE_COUNT + variants.length
+  const rows = Math.ceil(total / SHEET_COLS)
+  const canvas = document.createElement('canvas')
+  canvas.width = SHEET_COLS * tileSize
+  canvas.height = rows * tileSize
+  const ctx = canvas.getContext('2d')
+  ctx.imageSmoothingEnabled = false
+  for (let i = 0; i < TILE_COUNT; i++) {
+    if (tiles[i]) ctx.putImageData(tiles[i], (i % SHEET_COLS) * tileSize, Math.floor(i / SHEET_COLS) * tileSize)
+  }
+  variants.forEach((v, k) => {
+    const idx = TILE_COUNT + k
+    ctx.putImageData(v, (idx % SHEET_COLS) * tileSize, Math.floor(idx / SHEET_COLS) * tileSize)
+  })
+  return { canvas, rows, tileCount: total }
+}
 
 // ── Shared model ─────────────────────────────────────────────────────────────
 // Resolves every visible layer to a flat array of tile indices (-1 = empty),
 // dedupes tilesets by their layerTiles reference, and renders each to a canvas.
-function buildLevelModel({ level, layerTiles, tileSize, assetsById = {} }) {
+function buildLevelModel({ level, layerTiles, tileSize, assetsById = {}, tileVariation = false }) {
   const { width, height, layers } = level
   const border = level.seamlessEdges ? 1 : 0
 
@@ -24,13 +48,10 @@ function buildLevelModel({ level, layerTiles, tileSize, assetsById = {} }) {
     if (tilesetIdByRef.has(layerTile)) return tilesetIdByRef.get(layerTile)
     const id = tilesets.length
     const ts = layerTile.tileSize || tileSize
+    const variants = tileVariation ? makeFillVariants(layerTile.tiles[FILL_INDEX], ts) : []
+    const { canvas, rows, tileCount } = buildSheetCanvas(layerTile.tiles, variants, ts)
     tilesets.push({
-      id,
-      tileSize: ts,
-      columns: SHEET_COLS,
-      rows: SHEET_ROWS,
-      tileCount: TILE_COUNT,
-      canvas: composeNativeSheet(layerTile.tiles, ts),
+      id, tileSize: ts, columns: SHEET_COLS, rows, tileCount, variantCount: variants.length, canvas,
     })
     tilesetIdByRef.set(layerTile, id)
     return id
@@ -41,14 +62,20 @@ function buildLevelModel({ level, layerTiles, tileSize, assetsById = {} }) {
     const layerTile = layerTiles[li]
     if (!layerTile?.tiles) return
     const tilesetId = getTilesetId(layerTile)
+    const variantCount = tilesets[tilesetId].variantCount
     const indexMap = layer.kind === 'manual' ? null : computeIndexMap(layer.grid, width, height, border)
     const data = new Array(width * height)
     for (let cell = 0; cell < width * height; cell++) {
       const manualIdx = layer.manualTiles[cell]
-      const idx = layer.kind === 'manual'
+      let idx = layer.kind === 'manual'
         ? manualIdx
         : (manualIdx >= 0 ? manualIdx : (indexMap?.[cell] ?? 0))
       const isEmpty = layer.kind === 'manual' ? idx < 0 : !idx
+      // Bake the per-cell fill variant into the tile index (variant tiles live at 48..).
+      if (!isEmpty && variantCount > 0 && idx === FILL_INDEX) {
+        const pick = pickVariant(cell % width, (cell / width) | 0, 1 + variantCount)
+        if (pick > 0) idx = TILE_COUNT + (pick - 1)
+      }
       data[cell] = isEmpty ? -1 : idx
     }
     outLayers.push({ name: layer.name, visible: layer.visible !== false, tilesetId, data })
@@ -56,7 +83,10 @@ function buildLevelModel({ level, layerTiles, tileSize, assetsById = {} }) {
 
   const props = (level.placedProps || []).map(p => {
     const a = assetsById[p.assetId]
-    return { asset: String(p.assetId), x: p.x, y: p.y, cols: a?.cols ?? 1, rows: a?.rows ?? 1 }
+    return {
+      asset: String(p.assetId), x: p.x, y: p.y, cols: a?.cols ?? 1, rows: a?.rows ?? 1,
+      flipX: !!p.flipX, flipY: !!p.flipY, rotation: p.rotation || 0,
+    }
   })
 
   return { width, height, tileSize, tilesets, layers: outLayers, props }
@@ -150,8 +180,15 @@ function tiledMap(model, base) {
         y: p.y * model.tileSize,
         width: p.cols * model.tileSize,
         height: p.rows * model.tileSize,
-        rotation: 0,
+        rotation: p.rotation || 0,
         visible: true,
+        // Tiled rectangle objects have no native flip flag; carry it as props.
+        ...((p.flipX || p.flipY) ? {
+          properties: [
+            ...(p.flipX ? [{ name: 'flipX', type: 'bool', value: true }] : []),
+            ...(p.flipY ? [{ name: 'flipY', type: 'bool', value: true }] : []),
+          ],
+        } : {}),
       })),
     })
   }

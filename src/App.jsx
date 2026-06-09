@@ -173,6 +173,13 @@ function remapBaseTilePixels(bytes, fromColors, toColors) {
   return src
 }
 
+const PALETTE_KEYS = ['primary', 'secondary', 'border', 'highlight', 'shadow']
+// Value-compare two palette objects (the 5 named swatches), case-insensitively.
+function colorsEqual(a, b) {
+  if (!a || !b) return false
+  return PALETTE_KEYS.every(k => String(a[k]).toLowerCase() === String(b[k]).toLowerCase())
+}
+
 function descriptorFromBiome(biome) {
   return createEditorTilesetDescriptor({
     name: biome.label,
@@ -187,7 +194,7 @@ function descriptorFromBiome(biome) {
 export default function App() {
   const [activeView, setActiveView] = useState('editor') // 'editor' | 'level'
   const [editorKind, setEditorKind] = useState('tileset') // 'tileset' | 'prop'
-  const [tileSize, setTileSize]     = useState(16)
+  const [tileSize, setTileSize]     = useState(32)
   const [mode, setMode]             = useState('procedural') // 'procedural' | 'draw'
   const [levelMode, setLevelMode]   = useState('autotile')   // 'autotile' | 'manual'
   const [manualSelectedTile, setManualSelectedTile] = useState(1)
@@ -214,9 +221,20 @@ export default function App() {
 
   const [cellPx, setCellPxRaw]        = useState(18)
   const [showLevelGrid, setShowLevelGrid] = useState(true)
+  const [tileVariation, setTileVariation] = useState(false) // fill-tile anti-repetition
   const [levelTool, setLevelTool]     = useState('terrain') // 'terrain' | 'props'
   const [terrainTool, setTerrainTool] = useState('brush')
   const [terrainBrushSize, setTerrainBrushSize] = useState(1)
+  // Transform applied to newly placed props (and previewed by the placement ghost).
+  const [propTransform, setPropTransform] = useState({ flipX: false, flipY: false, rotation: 0 })
+  // Transient notice shown in the level view (e.g. tileset size mismatch).
+  const [levelNotice, setLevelNotice] = useState('')
+  const levelNoticeTimer = useRef(null)
+  const showLevelNotice = useCallback((msg) => {
+    setLevelNotice(msg)
+    clearTimeout(levelNoticeTimer.current)
+    levelNoticeTimer.current = setTimeout(() => setLevelNotice(''), 5000)
+  }, [])
   const levelCanvasAreaRef = useRef(null)
 
   const assetsById = useMemo(
@@ -248,8 +266,8 @@ export default function App() {
 
   const handlePlaceProp = useCallback((x, y) => {
     if (assets.selectedId == null) return
-    level.addProp(assets.selectedId, x, y)
-  }, [assets.selectedId, level])
+    level.addProp(assets.selectedId, x, y, propTransform)
+  }, [assets.selectedId, level, propTransform])
 
   const handleRemovePropAt = useCallback((x, y) => {
     for (let i = level.placedProps.length - 1; i >= 0; i--) {
@@ -312,7 +330,20 @@ export default function App() {
 
   const handleGenerate = () => {
     if (mode === 'draw') {
-      tilesheet.generateFromBitmap(drawing.getImageData(), tileSize)
+      const imageData = drawing.getImageData()
+      tilesheet.generateFromBitmap(imageData, tileSize)
+      // Reflect the drawing's own colors in the palette swatches (and the reset
+      // baseline) instead of leaving the previously active biome's palette.
+      const inferred = inferColorsFromTiles([{ data: imageData.data }])
+      if (inferred) {
+        setEditorTileset(prev => ({ ...prev, colors: cloneColors(inferred), baseColors: cloneColors(inferred) }))
+        // If a saved draw tileset is loaded, keep its source in sync with the new
+        // drawing + palette so the saved-tileset effect doesn't revert to the old
+        // base pixels (colors now match → it would reload basePixels verbatim).
+        setEditorSourceDef(prev => (prev?.mode === 'draw'
+          ? { ...prev, colors: cloneColors(inferred), basePixels: bytesToBase64(imageData.data) }
+          : prev))
+      }
     } else if (aiTextures?.center) {
       const centerData = new ImageData(new Uint8ClampedArray(aiTextures.center), tileSize, tileSize)
       const edgeData = aiTextures.edge
@@ -415,12 +446,17 @@ export default function App() {
   }, [tileSize, tilesheet, editorTileset])
 
   const currentTilesetDefinition = useCallback(() => {
-    if (mode === 'draw') return {
-      mode: 'draw',
-      basePixels: bytesToBase64(drawing.committedPixels),
-      label: editorTileset.name,
-      colors: editorTileset.colors,
-      ...(drawAiMeta ? { ai: drawAiMeta } : {}),
+    if (mode === 'draw') {
+      // Persist the palette inferred from the drawing's own pixels (so the saved
+      // swatches reflect the art), falling back to the current swatches.
+      const inferred = inferColorsFromTiles([{ data: drawing.committedPixels }]) || editorTileset.colors
+      return {
+        mode: 'draw',
+        basePixels: bytesToBase64(drawing.committedPixels),
+        label: editorTileset.name,
+        colors: inferred,
+        ...(drawAiMeta ? { ai: drawAiMeta } : {}),
+      }
     }
     if (aiTextures) return {
       mode: 'textures',
@@ -564,10 +600,16 @@ export default function App() {
 
     if (editorSourceDef.mode === 'draw' && editorSourceDef.basePixels) {
       const bytes = base64ToBytes(editorSourceDef.basePixels)
-      const recolored = remapBaseTilePixels(bytes, editorSourceDef.colors || editorTileset.baseColors, editorTileset.colors)
-      drawingRef.current.loadPixels(recolored)
-      const side = Math.round(Math.sqrt(recolored.length / 4))
-      tilesheetRef.current.generateFromBitmap(new ImageData(recolored, side, side), side)
+      // A freehand drawing is its own source of truth: load it verbatim (matching
+      // the gallery thumbnail). Only remap when the user actually edited a palette
+      // swatch — otherwise nearest-color snapping to the 5 swatches corrupts drawn
+      // colors that aren't exactly in the palette (the reported "otros colores").
+      const pixels = colorsEqual(editorSourceDef.colors, editorTileset.colors)
+        ? new Uint8ClampedArray(bytes)
+        : remapBaseTilePixels(bytes, editorSourceDef.colors || editorTileset.baseColors, editorTileset.colors)
+      drawingRef.current.loadPixels(pixels)
+      const side = Math.round(Math.sqrt(pixels.length / 4))
+      tilesheetRef.current.generateFromBitmap(new ImageData(pixels, side, side), side)
       return
     }
 
@@ -755,9 +797,16 @@ export default function App() {
       defaultName={mode === 'draw' ? 'Drawn tileset' : editorTileset.name}
       onSaveTileset={handleSaveTileset}
       onLoadTileset={activeView === 'level'
-        ? (row) => level.setLayerProp(level.activeLayerIdx, {
-            tileset: { name: row.name, tileSize: row.tile_size, definition: row.definition, savedId: row.id },
-          })
+        ? (row) => {
+            // Only allow tilesets whose tile size matches the level's tile size.
+            if ((row.tile_size || tileSize) !== tileSize) {
+              showLevelNotice(`"${row.name}" is ${row.tile_size}px — the level paints at ${tileSize}px. Set the level tile size to ${row.tile_size}px to use it.`)
+              return
+            }
+            level.setLayerProp(level.activeLayerIdx, {
+              tileset: { name: row.name, tileSize: row.tile_size, definition: row.definition, savedId: row.id },
+            })
+          }
         : handleLoadTileset}
       onRemoveTileset={tilesets.remove}
       assets={assets.assets}
@@ -829,6 +878,7 @@ export default function App() {
             layerTiles={layerTiles}
             assets={assets.assets} assetsById={assetsById}
             selectedAssetId={assets.selectedId} onSelectAsset={assets.select}
+            propTransform={propTransform} setPropTransform={setPropTransform}
             onPlaceProp={handlePlaceProp} onRemovePropAt={handleRemovePropAt}
             onTerrainStart={handleTerrainStart} onTerrainContinue={handleTerrainContinue}
             onTerrainFill={handleTerrainFill} onTerrainRect={handleTerrainRect} onTerrainPick={handleTerrainPick}
@@ -836,6 +886,8 @@ export default function App() {
             onSurprise={handleSurprise}
             levels={levels.levels} onSaveLevel={handleSaveLevel} onLoadLevel={handleLoadLevel} onRemoveLevel={levels.remove}
             levelsLoading={levels.loading} levelsError={levels.error}
+            onTileSizeChange={handleTileSizeChange} levelNotice={levelNotice}
+            tileVariation={tileVariation} setTileVariation={setTileVariation}
           />
           {galleryDock}
         </Suspense>

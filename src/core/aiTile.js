@@ -3,8 +3,22 @@
 //   - OpenAI (Images API, gpt-image family)
 // In dev, requests go through Vite proxies (/gemini, /openai) to avoid CORS.
 // API keys are read ONLY from .env.local (never from the UI). See resolveApiKey.
-const GEMINI_BASE = import.meta.env?.DEV ? '/gemini/v1beta' : 'https://generativelanguage.googleapis.com/v1beta'
-const OPENAI_BASE = import.meta.env?.DEV ? '/openai/v1' : 'https://api.openai.com/v1'
+//
+// This module is only reached through the lazy AI panels, so image-q rides in
+// the lazy AI chunk (not the initial bundle).
+import { utils as iqUtils, buildPaletteSync, applyPaletteSync } from 'image-q'
+
+// Dithering modes exposed in the AI tile panels (UI label → image-q mode).
+export const DITHER_OPTIONS = [
+  { value: 'nearest',         label: 'Off' },
+  { value: 'floyd-steinberg', label: 'Floyd–Steinberg' },
+  { value: 'atkinson',        label: 'Atkinson' },
+]
+const DEFAULT_DITHER = 'nearest'
+const QUANT_FORMULA = 'euclidean-bt709'
+// Exported so the text-generation path (aiText.js) reuses the same dev proxies.
+export const GEMINI_BASE = import.meta.env?.DEV ? '/gemini/v1beta' : 'https://generativelanguage.googleapis.com/v1beta'
+export const OPENAI_BASE = import.meta.env?.DEV ? '/openai/v1' : 'https://api.openai.com/v1'
 const DEFAULT_IMAGE_MODEL = 'gemini-2.5-flash-image'
 const FALLBACK_IMAGE_MODEL = 'gemini-2.5-flash-image'
 const DEFAULT_QUALITY = 'high'
@@ -330,50 +344,6 @@ function sharpenPixels(data, w, h, amount = 0.38) {
   return out
 }
 
-function averageColor(colors) {
-  let r = 0, g = 0, b = 0, count = 0
-  for (const c of colors) {
-    r += c[0]
-    g += c[1]
-    b += c[2]
-    count++
-  }
-  return [Math.round(r / count), Math.round(g / count), Math.round(b / count)]
-}
-
-function splitColorBox(colors) {
-  let minR = 255, minG = 255, minB = 255
-  let maxR = 0, maxG = 0, maxB = 0
-  for (const c of colors) {
-    minR = Math.min(minR, c[0]); maxR = Math.max(maxR, c[0])
-    minG = Math.min(minG, c[1]); maxG = Math.max(maxG, c[1])
-    minB = Math.min(minB, c[2]); maxB = Math.max(maxB, c[2])
-  }
-  const ranges = [maxR - minR, maxG - minG, maxB - minB]
-  const channel = ranges.indexOf(Math.max(...ranges))
-  const sorted = [...colors].sort((a, b) => a[channel] - b[channel])
-  const mid = Math.max(1, Math.floor(sorted.length / 2))
-  return [sorted.slice(0, mid), sorted.slice(mid)]
-}
-
-function buildMedianCutPalette(data, maxColors) {
-  let boxes = [[]]
-  for (let i = 0; i < data.length; i += 4) boxes[0].push([data[i], data[i + 1], data[i + 2]])
-
-  while (boxes.length < maxColors) {
-    boxes.sort((a, b) => b.length - a.length)
-    const box = boxes.shift()
-    if (!box || box.length <= 1) {
-      if (box) boxes.push(box)
-      break
-    }
-    const [a, b] = splitColorBox(box)
-    boxes.push(a, b)
-  }
-
-  return boxes.filter(box => box.length > 0).map(averageColor)
-}
-
 function nearestPaletteColor(r, g, b, palette) {
   let best = palette[0]
   let bestDist = Number.POSITIVE_INFINITY
@@ -390,17 +360,30 @@ function nearestPaletteColor(r, g, b, palette) {
   return best
 }
 
-function quantizePixels(data, maxColors = MAX_TILE_COLORS) {
-  const palette = buildMedianCutPalette(data, maxColors)
-  const out = new Uint8ClampedArray(data)
+// Quantize to <= maxColors using image-q (Wu palette + optional dithering),
+// replacing the hand-rolled median cut. Returns the quantized RGBA plus the
+// actually-used palette as [[r,g,b]] (for seam repair) — same shape as before.
+function quantizePixels(data, w, h, maxColors = MAX_TILE_COLORS, dither = DEFAULT_DITHER) {
+  const pc = iqUtils.PointContainer.fromUint8Array(data, w, h)
+  const palette = buildPaletteSync([pc], {
+    colors: maxColors,
+    paletteQuantization: 'wuquant',
+    colorDistanceFormula: QUANT_FORMULA,
+  })
+  const outPc = applyPaletteSync(pc, palette, {
+    imageQuantization: dither,
+    colorDistanceFormula: QUANT_FORMULA,
+  })
+  const out = new Uint8ClampedArray(outPc.toUint8Array())
+  for (let i = 3; i < out.length; i += 4) out[i] = 255 // keep tiles opaque
+
+  const seen = new Set()
+  const pal = []
   for (let i = 0; i < out.length; i += 4) {
-    const c = nearestPaletteColor(out[i], out[i + 1], out[i + 2], palette)
-    out[i] = c[0]
-    out[i + 1] = c[1]
-    out[i + 2] = c[2]
-    out[i + 3] = 255
+    const key = (out[i] << 16) | (out[i + 1] << 8) | out[i + 2]
+    if (!seen.has(key)) { seen.add(key); pal.push([out[i], out[i + 1], out[i + 2]]) }
   }
-  return { data: out, palette, colorCount: new Set(palette.map(c => c.join(','))).size }
+  return { data: out, palette: pal, colorCount: pal.length }
 }
 
 export function measureSeamScore(data, w, h) {
@@ -470,12 +453,13 @@ function repairSeams(data, w, h, palette = null) {
 
 export function postprocessTilePixels(rawPixels, rawWidth, rawHeight, tileSize, {
   maxColors = MAX_TILE_COLORS,
+  dither = DEFAULT_DITHER,
 } = {}) {
   let pixels = resizeRgbaArea(rawPixels, rawWidth, rawHeight, tileSize, tileSize)
   for (let i = 0; i < pixels.length; i += 4) pixels[i + 3] = 255
   pixels = sharpenPixels(pixels, tileSize, tileSize)
   pixels = repairSeams(pixels, tileSize, tileSize)
-  const quantized = quantizePixels(pixels, Math.max(8, Math.min(12, maxColors)))
+  const quantized = quantizePixels(pixels, tileSize, tileSize, Math.max(8, Math.min(12, maxColors)), dither)
   pixels = repairSeams(quantized.data, tileSize, tileSize, quantized.palette)
   const colorCount = new Set(Array.from({ length: pixels.length / 4 }, (_, idx) => {
     const i = idx * 4
@@ -500,12 +484,13 @@ export async function generateBaseTileWithAI({
   role = 'center',
   paletteHint = null,
   contextPrompt = '',
+  dither = DEFAULT_DITHER,
 }) {
   if (!prompt || !prompt.trim()) throw new Error('Enter a prompt describing the tile.')
 
   const finalPrompt = buildTilePrompt({ subject: prompt, role, tileSize, paletteHint, contextPrompt })
   const decoded = await generateImage({ prompt: finalPrompt, model, quality, outputFormat })
-  const processed = postprocessTilePixels(decoded.data, decoded.width, decoded.height, tileSize)
+  const processed = postprocessTilePixels(decoded.data, decoded.width, decoded.height, tileSize, { dither })
 
   return {
     pixels: processed.pixels,

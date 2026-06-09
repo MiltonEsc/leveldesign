@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { generateBaseTileWithAI } from '../../core/aiTile.js'
+import { generateBaseTileWithAI, DITHER_OPTIONS } from '../../core/aiTile.js'
 import { useAIModel } from '../../hooks/useAIModel.js'
 
 const PROMPT_PRESETS = [
@@ -10,7 +10,8 @@ const PROMPT_PRESETS = [
 
 export function AITilePanel({ tileSize, paletteHint, onGenerated }) {
   const [prompt, setPrompt] = useState('')
-  const { model, setModel, loading, error, run, AI_MODELS } = useAIModel()
+  const [dither, setDither] = useState(DITHER_OPTIONS[0].value)
+  const { model, setModel, loading, error, run, models } = useAIModel()
 
   const handleGenerate = async () => {
     const result = await run(() => generateBaseTileWithAI({
@@ -19,6 +20,7 @@ export function AITilePanel({ tileSize, paletteHint, onGenerated }) {
       tileSize,
       role: 'center',
       paletteHint,
+      dither,
     }))
     if (result) onGenerated(result.pixels, result)
   }
@@ -56,7 +58,14 @@ export function AITilePanel({ tileSize, paletteHint, onGenerated }) {
         <span className="brush-label">Style</span>
       </div>
       <select className="ai-model" value={model} onChange={e => setModel(e.target.value)} disabled={loading}>
-        {AI_MODELS.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+        {models.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+      </select>
+
+      <div className="sidebar-inline-label">
+        <span className="brush-label">Dithering</span>
+      </div>
+      <select className="ai-model" value={dither} onChange={e => setDither(e.target.value)} disabled={loading}>
+        {DITHER_OPTIONS.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
       </select>
 
       <button className="ai-generate-btn generator-submit-btn" onClick={handleGenerate} disabled={loading || !prompt.trim()}>

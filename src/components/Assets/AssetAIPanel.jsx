@@ -20,7 +20,7 @@ const ASSET_PRESETS = [
 
 export function AssetAIPanel({ pxW, pxH, onGenerated }) {
   const [prompt, setPrompt] = useState('')
-  const { model, setModel, loading, error, run, AI_MODELS } = useAIModel()
+  const { model, setModel, loading, error, run, models } = useAIModel()
   const [quality, setQuality] = useState(() => localStorage.getItem(STORAGE_KEYS.AI_IMAGE_QUALITY) || 'low')
 
   const handleQualityChange = (v) => { setQuality(v); localStorage.setItem(STORAGE_KEYS.AI_IMAGE_QUALITY, v) }
@@ -61,7 +61,7 @@ export function AssetAIPanel({ pxW, pxH, onGenerated }) {
         <span className="brush-label">Model</span>
       </div>
       <select className="ai-model" value={model} onChange={e => setModel(e.target.value)} disabled={loading}>
-        {AI_MODELS.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+        {models.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
       </select>
 
       <div className="sidebar-inline-label" style={{ marginTop: 6 }}>

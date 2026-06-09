@@ -221,6 +221,40 @@ textarea.text-input { resize: vertical; font-family: var(--ui); }
 .tool-btn:hover { border-color: #ffffff2e; color: var(--ink); }
 .tool-btn.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); box-shadow: var(--btn-shadow); }
 
+/* ── Level generator panel ──────────────────────────────────────────────── */
+.gen-panel { display: flex; flex-direction: column; gap: 8px; }
+.gen-params { display: flex; flex-direction: column; gap: 8px; margin-top: 2px; }
+.gen-param { display: flex; flex-direction: column; gap: 3px; }
+.gen-param-head { display: flex; align-items: center; justify-content: space-between; }
+.gen-param input[type="range"] { width: 100%; accent-color: var(--accent); cursor: pointer; }
+.gen-seed { display: flex; align-items: center; gap: 6px; }
+.gen-seed-input { flex: 1; min-width: 0; font-family: var(--mono); font-size: 11px; }
+.gen-mini-btn { background: var(--surface-2); border: var(--bw) solid var(--line); border-radius: var(--r-btn);
+  color: var(--ink-dim); cursor: pointer; padding: 4px 7px; font-size: 12px; line-height: 1; transition: all .12s; }
+.gen-mini-btn:hover { border-color: #ffffff2e; }
+.gen-mini-btn.on { background: var(--accent); border-color: var(--accent); }
+.gen-mini-row { display: flex; gap: 6px; }
+.gen-mini-row .gen-mini-btn { flex: 1; }
+.gen-variations { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.gen-variation { padding: 0; background: var(--surface-3); border: var(--bw) solid var(--line);
+  border-radius: var(--r-card); cursor: pointer; overflow: hidden; aspect-ratio: 1; transition: border-color .12s; }
+.gen-variation:hover { border-color: var(--accent); }
+.gen-thumb-canvas { width: 100%; height: 100%; display: block; image-rendering: pixelated;
+  background: var(--surface-1); object-fit: contain; }
+
+/* ── AI idea cards ──────────────────────────────────────────────────────── */
+.idea-list { display: flex; flex-direction: column; gap: 7px; }
+.idea-card { display: flex; gap: 9px; align-items: stretch; text-align: left; padding: 7px;
+  background: var(--surface-3); border: var(--bw) solid var(--line); border-radius: var(--r-card);
+  cursor: pointer; transition: border-color .12s; }
+.idea-card:hover { border-color: var(--accent); }
+.idea-thumb { flex: 0 0 48px; width: 48px; height: 48px; border-radius: var(--r-btn);
+  overflow: hidden; background: var(--surface-1); }
+.idea-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.idea-name { font-family: var(--ui); font-size: 12px; font-weight: 700; color: var(--ink); }
+.idea-desc { font-size: 11px; color: var(--ink-dim); line-height: 1.25; }
+.idea-meta { font-size: 9.5px; color: var(--accent); text-transform: uppercase; letter-spacing: .05em; margin-top: 1px; }
+
 .palette-wrap { background: var(--surface-3); border: var(--bw) solid var(--line); border-radius: var(--r-card); padding: 6px; margin-top: 4px; }
 .palette-canvas { image-rendering: pixelated; display: block; width: 100%; height: auto; cursor: pointer; border-radius: 3px; }
 
@@ -336,6 +370,7 @@ textarea.text-input { resize: vertical; font-family: var(--ui); }
 .level-status-bar { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; z-index: 6; flex-wrap: wrap; justify-content: center; }
 .level-status-pill { background: var(--surface-1); border: var(--bw) solid var(--line); color: var(--ink-dim);
   font-family: var(--mono); font-size: 11px; padding: 4px 10px; border-radius: var(--r-btn); }
+.level-status-notice { background: var(--danger-soft); border-color: var(--danger-line); color: var(--danger); font-family: var(--ui); }
 .sidebar-toggle { position: absolute; top: 12px; left: 12px; z-index: 10; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
   border-radius: var(--r-btn); border: var(--bw) solid var(--line); background: var(--surface-1); color: var(--ink); cursor: pointer; transition: all .15s; }
 .sidebar-toggle:hover { border-color: var(--accent-line); background: var(--surface-3); }
