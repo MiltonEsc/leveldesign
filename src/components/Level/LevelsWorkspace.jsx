@@ -25,6 +25,7 @@ const SIZE_PRESETS = [
 const LEVEL_TOOL_OPTIONS = [
   { value: 'terrain', label: 'Terrain' },
   { value: 'props', label: 'Props' },
+  { value: 'select', label: 'Select' },
 ]
 
 const TERRAIN_TOOLS = [
@@ -182,6 +183,8 @@ export function LevelsWorkspace({
   terrainTool, setTerrainTool, terrainBrushSize, setTerrainBrushSize,
   manualSelectedTile, setManualSelectedTile,
   propTransform, setPropTransform,
+  selectedProp = null, onSelectPropAt, onMoveProp,
+  onUpdateSelectedProp, onMoveSelectedPropZ, onDeleteSelectedProp,
   layerTiles,
   onTerrainStart, onTerrainContinue, onTerrainFill, onTerrainRect, onTerrainPick,
   onFillActiveLayer, onClearActiveLayer,
@@ -199,19 +202,25 @@ export function LevelsWorkspace({
   const activeLayer = level.layers[level.activeLayerIdx] || null
   const activeLayerTile = layerTiles[level.activeLayerIdx] || null
 
-  // Global level undo/redo (Ctrl+Z / Ctrl+Y), ignored while typing in a field.
+  // Global level undo/redo (Ctrl+Z / Ctrl+Y) + Delete for the selected prop,
+  // ignored while typing in a field.
   useEffect(() => {
     const handleKey = (e) => {
-      if (!e.ctrlKey && !e.metaKey) return
       const tag = e.target?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable) return
+      if ((e.key === 'Delete' || e.key === 'Backspace') && levelTool === 'select' && selectedProp) {
+        e.preventDefault()
+        onDeleteSelectedProp?.()
+        return
+      }
+      if (!e.ctrlKey && !e.metaKey) return
       const key = e.key.toLowerCase()
       if (key === 'z' && !e.shiftKey) { e.preventDefault(); level.undo() }
       else if (key === 'y' || (key === 'z' && e.shiftKey)) { e.preventDefault(); level.redo() }
     }
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
-  }, [level.undo, level.redo])
+  }, [level.undo, level.redo, levelTool, selectedProp, onDeleteSelectedProp])
 
   const getCachedNativeSheet = useCallback((layerTile) => {
     if (!layerTile?.tiles?.length) return null
@@ -303,7 +312,16 @@ export function LevelsWorkspace({
       const asset = assetsById[p.assetId]
       const assetCanvas = getAssetCanvas(asset)
       if (!assetCanvas) continue
-      ctx.drawImage(assetCanvas, p.x * tileSize, p.y * tileSize, asset.cols * tileSize, asset.rows * tileSize)
+      // Mirror LevelCanvas's applyPropTransform: flip/rotate around the
+      // footprint centre so the baked PNG matches the live view.
+      const w = asset.cols * tileSize
+      const h = asset.rows * tileSize
+      ctx.save()
+      ctx.translate(p.x * tileSize + w / 2, p.y * tileSize + h / 2)
+      ctx.rotate(((p.rotation || 0) * Math.PI) / 180)
+      ctx.scale(p.flipX ? -1 : 1, p.flipY ? -1 : 1)
+      ctx.drawImage(assetCanvas, -w / 2, -h / 2, w, h)
+      ctx.restore()
     }
 
     const link = document.createElement('a')
@@ -398,7 +416,9 @@ export function LevelsWorkspace({
                 ? (levelMode === 'manual'
                   ? 'Left-click paints, right-click erases. Tile palette below.'
                   : 'Left-click paints solid, right-click erases. Borders autotile.')
-                : 'Pick a prop, click to place, right-click to remove.'}
+                : levelTool === 'props'
+                  ? 'Pick a prop, click to place, right-click to remove.'
+                  : 'Click a placed prop to select it. Drag to move, Delete to remove.'}
             </p>
 
             {levelTool === 'terrain' && (
@@ -460,6 +480,47 @@ export function LevelsWorkspace({
                   Clear props ({level.placedProps.length})
                 </Btn>
               </div>
+            )}
+
+            {levelTool === 'select' && (
+              selectedProp ? (
+                <div style={{ marginTop: 10 }}>
+                  <div className="sidebar-inline-label">
+                    <span className="brush-label">
+                      {assetsById[selectedProp.assetId]?.name || 'Prop'} · ({selectedProp.x}, {selectedProp.y})
+                    </span>
+                    <span className="tool-meta">
+                      {selectedProp.rotation || 0}°{selectedProp.flipX ? ' H' : ''}{selectedProp.flipY ? ' V' : ''}
+                    </span>
+                  </div>
+                  <div className="gen-mini-row">
+                    <button className={`gen-mini-btn ${selectedProp.flipX ? 'on' : ''}`} title="Flip horizontal"
+                      onClick={() => onUpdateSelectedProp?.({ flipX: !selectedProp.flipX })}>Flip H</button>
+                    <button className={`gen-mini-btn ${selectedProp.flipY ? 'on' : ''}`} title="Flip vertical"
+                      onClick={() => onUpdateSelectedProp?.({ flipY: !selectedProp.flipY })}>Flip V</button>
+                    <button className="gen-mini-btn" title="Rotate 90 degrees"
+                      onClick={() => onUpdateSelectedProp?.({ rotation: ((selectedProp.rotation || 0) + 90) % 360 })}>Rotate</button>
+                    <button className="gen-mini-btn" title="Reset transform"
+                      onClick={() => onUpdateSelectedProp?.({ flipX: false, flipY: false, rotation: 0 })}>Reset</button>
+                  </div>
+                  <div className="gen-mini-row">
+                    <button className="gen-mini-btn" title="Draw above other props"
+                      onClick={() => onMoveSelectedPropZ?.(1)}>Forward</button>
+                    <button className="gen-mini-btn" title="Draw below other props"
+                      onClick={() => onMoveSelectedPropZ?.(-1)}>Backward</button>
+                  </div>
+                  <Btn size="sm" variant="danger" icon="trash" full style={{ marginTop: 8 }}
+                    onClick={onDeleteSelectedProp}>
+                    Delete prop (Del)
+                  </Btn>
+                </div>
+              ) : (
+                <p className="hint" style={{ marginTop: 10 }}>
+                  {level.placedProps.length
+                    ? 'No prop selected.'
+                    : 'No props placed yet. Use the Props tool first.'}
+                </p>
+              )
             )}
           </Section>
 
@@ -610,6 +671,9 @@ export function LevelsWorkspace({
             tileVariation={tileVariation}
             onPlaceProp={onPlaceProp}
             onRemovePropAt={onRemovePropAt}
+            selectedProp={selectedProp}
+            onSelectPropAt={onSelectPropAt}
+            onMoveProp={onMoveProp}
           />
         ) : (
           <div className="level-empty">Generate a tileset first in the Editor view.</div>

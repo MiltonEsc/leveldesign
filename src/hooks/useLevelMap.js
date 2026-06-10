@@ -447,6 +447,12 @@ export function useLevelMap(initialW = 32, initialH = 20) {
       }
       return { ...layer, grid: nextGrid, manualTiles: nextMT }
     }))
+    // Drop props whose anchor falls outside the new bounds (the hook doesn't
+    // know asset dimensions, so partially-overhanging props are kept — same
+    // rule as placement, which only validates the anchor cell).
+    setPlacedProps(prev => prev.every(p => p.x < w && p.y < h)
+      ? prev
+      : prev.filter(p => p.x < w && p.y < h))
   }, [discardStrokeBuffer, pushHistory, snapshot])
 
   // ── Props ──────────────────────────────────────────────────────────────────
@@ -467,6 +473,26 @@ export function useLevelMap(initialW = 32, initialH = 20) {
     if (!ppRef.current.some(p => p.id === id)) return
     pushHistory(snapshot())
     setPlacedProps(prev => prev.filter(p => p.id !== id))
+  }, [pushHistory, snapshot])
+  // Patches a placed prop (move / transform edits from the Select tool).
+  // recordHistory=false lets a drag be a single undo entry: the caller pushes
+  // on the first real change and passes false for the rest of the drag.
+  const updateProp = useCallback((id, patch, recordHistory = true) => {
+    if (!ppRef.current.some(p => p.id === id)) return
+    if (recordHistory) pushHistory(snapshot())
+    setPlacedProps(prev => prev.map(p => p.id === id ? { ...p, ...patch } : p))
+  }, [pushHistory, snapshot])
+  // Z-order: placedProps array order = draw order (later = on top).
+  const movePropZ = useCallback((id, direction) => {
+    const idx = ppRef.current.findIndex(p => p.id === id)
+    const next = idx + direction
+    if (idx < 0 || next < 0 || next >= ppRef.current.length) return
+    pushHistory(snapshot())
+    setPlacedProps(prev => {
+      const arr = [...prev]
+      ;[arr[idx], arr[next]] = [arr[next], arr[idx]]
+      return arr
+    })
   }, [pushHistory, snapshot])
   const clearProps = useCallback(() => {
     if (!ppRef.current.length) return
@@ -494,7 +520,7 @@ export function useLevelMap(initialW = 32, initialH = 20) {
     getCell, paintArea, fillAt, fillRect,
     getManualTile, paintManualArea, fillManualAt, fillManualRect,
     clearManualTiles, clearManualArea, clearManualFill, clearManualRect, fillManualAll,
-    placedProps, addProp, removeProp, clearProps,
+    placedProps, addProp, removeProp, updateProp, movePropZ, clearProps,
     loadState,
     undo, redo,
     canUndo: undoStack.current.length > 0,

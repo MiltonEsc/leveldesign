@@ -1,4 +1,5 @@
 import { useRef, useEffect, useCallback } from 'react'
+import { forEachCellOnLine } from '../../core/canvasUtils.js'
 
 // Pixel editor canvas for non-square props. A CSS checkerboard sits behind the
 // drawing canvas so transparent pixels are visible. Right-click always erases.
@@ -10,7 +11,9 @@ export function AssetCanvas({
 }) {
   const canvasRef = useRef(null)
   const gridRef   = useRef(null)
+  const wrapperRef = useRef(null)
   const erasingRef = useRef(false)
+  const lastCell   = useRef(null) // last painted cell, for stroke interpolation
 
   // Render pixels
   useEffect(() => {
@@ -54,6 +57,7 @@ export function AssetCanvas({
   const handleMouseDown = useCallback((e) => {
     e.preventDefault()
     const [x, y] = getPixelCoords(e)
+    lastCell.current = [x, y]
     if (e.button === 2) {
       erasingRef.current = true
       onStartErase?.(x, y)
@@ -66,22 +70,40 @@ export function AssetCanvas({
   const handleMouseMove = useCallback((e) => {
     if (e.buttons === 0) return
     const [x, y] = getPixelCoords(e)
-    if (erasingRef.current) {
-      onContinueErase?.(x, y)
-    } else if (e.buttons === 1) {
-      onContinueStroke(x, y)
+    const visit = erasingRef.current
+      ? (px, py) => onContinueErase?.(px, py)
+      : (e.buttons === 1 ? (px, py) => onContinueStroke(px, py) : null)
+    if (!visit) return
+    const prev = lastCell.current
+    // Interpolate between move events so fast strokes don't leave gaps.
+    if (prev && (prev[0] !== x || prev[1] !== y)) {
+      forEachCellOnLine(prev[0], prev[1], x, y, visit)
+    } else {
+      visit(x, y)
     }
+    lastCell.current = [x, y]
   }, [getPixelCoords, onContinueStroke, onContinueErase])
 
   const handleMouseUp = useCallback(() => {
     erasingRef.current = false
+    lastCell.current = null
     onEndStroke()
   }, [onEndStroke])
 
+  // Wheel zoom — attached as a non-passive native listener so preventDefault
+  // works (React registers onWheel as passive, which would ignore it and warn).
   const handleWheel = useCallback((e) => {
+    if (!onZoomChange) return
     e.preventDefault()
-    onZoomChange?.(e.deltaY < 0 ? 1 : -1)
+    onZoomChange(e.deltaY < 0 ? 1 : -1)
   }, [onZoomChange])
+
+  useEffect(() => {
+    const el = wrapperRef.current
+    if (!el) return
+    el.addEventListener('wheel', handleWheel, { passive: false })
+    return () => el.removeEventListener('wheel', handleWheel)
+  }, [handleWheel])
 
   const dW = width * zoom
   const dH = height * zoom
@@ -89,6 +111,7 @@ export function AssetCanvas({
 
   return (
     <div
+      ref={wrapperRef}
       className="asset-canvas-wrapper checker-bg"
       style={{ position: 'relative', width: dW, height: dH }}
       onContextMenu={e => e.preventDefault()}
@@ -102,7 +125,6 @@ export function AssetCanvas({
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
-        onWheel={handleWheel}
       />
       <canvas
         ref={gridRef}

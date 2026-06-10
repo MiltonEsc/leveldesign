@@ -9,30 +9,34 @@
 import { computeIndexMap } from './autotile.js'
 import { composeNativeSheet, SHEET_COLS, SHEET_ROWS } from './composeSheet.js'
 import { FILL_INDEX, makeFillVariants, pickVariant } from './tileVariants.js'
+import { ANIM_FRAME_MS } from './tilesetDefinition.js'
 
 const TILE_COUNT = SHEET_COLS * SHEET_ROWS // 48
 
-// Builds the tileset sheet canvas, optionally with fill-tile variants appended as
-// extra tiles (indices 48..) so the baked level keeps its anti-repetition.
-function buildSheetCanvas(tiles, variants, tileSize) {
-  if (!variants.length) {
-    return { canvas: composeNativeSheet(tiles, tileSize), rows: SHEET_ROWS, tileCount: TILE_COUNT }
+// Builds the tileset sheet canvas. Layout: 48 base tiles, then fill-tile
+// variants (anti-repetition, indices 48..48+V-1), then one full 48-tile block
+// per animation frame starting at frameStart = 48+V.
+function buildSheetCanvas(tiles, variants, tileSize, frames = []) {
+  if (!variants.length && !frames.length) {
+    return { canvas: composeNativeSheet(tiles, tileSize), rows: SHEET_ROWS, tileCount: TILE_COUNT, frameStart: 0 }
   }
-  const total = TILE_COUNT + variants.length
+  const frameStart = TILE_COUNT + variants.length
+  const total = frameStart + frames.length * TILE_COUNT
   const rows = Math.ceil(total / SHEET_COLS)
   const canvas = document.createElement('canvas')
   canvas.width = SHEET_COLS * tileSize
   canvas.height = rows * tileSize
   const ctx = canvas.getContext('2d')
   ctx.imageSmoothingEnabled = false
-  for (let i = 0; i < TILE_COUNT; i++) {
-    if (tiles[i]) ctx.putImageData(tiles[i], (i % SHEET_COLS) * tileSize, Math.floor(i / SHEET_COLS) * tileSize)
+  const blit = (img, idx) => {
+    if (img) ctx.putImageData(img, (idx % SHEET_COLS) * tileSize, Math.floor(idx / SHEET_COLS) * tileSize)
   }
-  variants.forEach((v, k) => {
-    const idx = TILE_COUNT + k
-    ctx.putImageData(v, (idx % SHEET_COLS) * tileSize, Math.floor(idx / SHEET_COLS) * tileSize)
+  for (let i = 0; i < TILE_COUNT; i++) blit(tiles[i], i)
+  variants.forEach((v, k) => blit(v, TILE_COUNT + k))
+  frames.forEach((frameTiles, f) => {
+    for (let i = 0; i < TILE_COUNT; i++) blit(frameTiles?.[i], frameStart + f * TILE_COUNT + i)
   })
-  return { canvas, rows, tileCount: total }
+  return { canvas, rows, tileCount: total, frameStart }
 }
 
 // ── Shared model ─────────────────────────────────────────────────────────────
@@ -49,9 +53,11 @@ function buildLevelModel({ level, layerTiles, tileSize, assetsById = {}, tileVar
     const id = tilesets.length
     const ts = layerTile.tileSize || tileSize
     const variants = tileVariation ? makeFillVariants(layerTile.tiles[FILL_INDEX], ts) : []
-    const { canvas, rows, tileCount } = buildSheetCanvas(layerTile.tiles, variants, ts)
+    const frames = layerTile.frames || []
+    const { canvas, rows, tileCount, frameStart } = buildSheetCanvas(layerTile.tiles, variants, ts, frames)
     tilesets.push({
       id, tileSize: ts, columns: SHEET_COLS, rows, tileCount, variantCount: variants.length, canvas,
+      frameCount: frames.length, frameStart, frameDuration: ANIM_FRAME_MS,
     })
     tilesetIdByRef.set(layerTile, id)
     return id
@@ -144,6 +150,23 @@ function tiledMap(model, base) {
       columns: ts.columns,
       margin: 0,
       spacing: 0,
+      // Animated tilesets: every autotile id (1..47) cycles through its frame
+      // copies, which live in full 48-tile blocks starting at frameStart.
+      ...(ts.frameCount > 0 ? {
+        tiles: Array.from({ length: 47 }, (_, k) => {
+          const id = k + 1
+          return {
+            id,
+            animation: [
+              { tileid: id, duration: ts.frameDuration },
+              ...Array.from({ length: ts.frameCount }, (_, f) => ({
+                tileid: ts.frameStart + f * 48 + id,
+                duration: ts.frameDuration,
+              })),
+            ],
+          }
+        }),
+      } : {}),
     }
     firstgid += ts.tileCount
     return entry
@@ -226,6 +249,11 @@ function genericJson(model, base) {
       rows: ts.rows,
       tileCount: ts.tileCount,
       tileSize: ts.tileSize,
+      // Frame copies of tiles 0..47 start at frameStart in blocks of 48; the
+      // bundled Godot/Unity importers place the static frame and ignore this.
+      ...(ts.frameCount > 0 ? {
+        animation: { frameCount: ts.frameCount, frameStart: ts.frameStart, frameDuration: ts.frameDuration },
+      } : {}),
     })),
     layers: model.layers.map(l => ({ name: l.name, visible: l.visible, tileset: l.tilesetId, data: l.data })),
     props: model.props,

@@ -20,7 +20,11 @@ import { BIOMES, BIOME_MAP } from './constants/biomes.js'
 import { GENERATORS }       from './core/levelGenerator.js'
 import { clampCellPx }      from './components/Level/zoomConfig.js'
 import { bytesToBase64, base64ToBytes } from './lib/serialize.js'
-import { tilesFromDefinition } from './core/tilesetDefinition.js'
+import {
+  tilesFromDefinition, applyTileOverrides, decodeDefinitionOverrides,
+  framesFromDefinition, MAX_ANIM_FRAMES,
+} from './core/tilesetDefinition.js'
+import { generateAllBiomeTiles } from './core/proceduralGen.js'
 
 function cloneColors(colors) {
   return {
@@ -213,11 +217,25 @@ export default function App() {
   const tilesets  = useTilesets()
   const levels    = useLevels()
 
+  // Per-tile overrides: hand-edited pixels for individual sheet tiles, applied
+  // over whatever the generators produce. `overrideDraw` is a second drawing
+  // canvas used only while editing one tile (editingTile = its sheet index).
+  const [tileOverrides, setTileOverrides] = useState({})
+  const [editingTile, setEditingTile] = useState(null)
+  const overrideDraw = useDrawingCanvas(tileSize)
+  // Animated tiles (procedural mode): total frame count, 1 = off.
+  const [animFrameCount, setAnimFrameCount] = useState(1)
+  // AI texture state (procedural textures mode) — declared before the memos
+  // below that read it.
+  const [aiTextures, setAiTextures] = useState(null)
+  const [drawAiMeta, setDrawAiMeta] = useState(null)
+
   // "Latest ref" pattern: effects that call into these hooks read .current so
   // they don't have to list the (unstable, recreated-every-render) hook objects
   // as dependencies — which would cause infinite re-render loops.
   const drawingRef   = useRef(drawing);   drawingRef.current = drawing
   const tilesheetRef = useRef(tilesheet); tilesheetRef.current = tilesheet
+  const overrideDrawRef = useRef(overrideDraw); overrideDrawRef.current = overrideDraw
 
   const [cellPx, setCellPxRaw]        = useState(18)
   const [showLevelGrid, setShowLevelGrid] = useState(true)
@@ -248,7 +266,25 @@ export default function App() {
   // RAF flush while the tileset object stays the same reference, so a reference
   // key is both correct and avoids hashing the (large, base64-laden) definition.
   const layerTilesCache = useRef(new WeakMap())
-  const editorLayerTile = useMemo(() => ({ tiles: tilesheet.tiles, tileSize }), [tilesheet.tiles, tileSize])
+  // The tiles everything renders: generator output + per-tile overrides on top.
+  const displayTiles = useMemo(
+    () => applyTileOverrides(tilesheet.tiles, tileOverrides, tileSize),
+    [tilesheet.tiles, tileOverrides, tileSize]
+  )
+  // Animation frames for the editor tileset (procedural biome mode only): the
+  // extra seeded sheet variants beyond the static frame, with the same per-tile
+  // overrides applied so hand-edited tiles stay static.
+  const editorAnimFrames = useMemo(() => {
+    if (animFrameCount < 2 || mode !== 'procedural' || aiTextures) return null
+    const base = BIOME_MAP[editorTileset.biomeId] || BIOMES[0]
+    const biome = { ...base, colors: cloneColors(editorTileset.colors) }
+    return Array.from({ length: animFrameCount - 1 }, (_, f) =>
+      applyTileOverrides(generateAllBiomeTiles(biome, tileSize, f + 1), tileOverrides, tileSize))
+  }, [animFrameCount, mode, aiTextures, editorTileset.biomeId, editorTileset.colors, tileSize, tileOverrides])
+  const editorLayerTile = useMemo(
+    () => ({ tiles: displayTiles, tileSize, frames: editorAnimFrames }),
+    [displayTiles, tileSize, editorAnimFrames]
+  )
   const layerTiles = useMemo(() => (
     level.layers.map(layer => {
       if (!layer.tileset) return editorLayerTile
@@ -257,6 +293,7 @@ export default function App() {
         cache.set(layer.tileset, {
           tiles: tilesFromDefinition(layer.tileset.definition, layer.tileset.tileSize),
           tileSize: layer.tileset.tileSize,
+          frames: framesFromDefinition(layer.tileset.definition, layer.tileset.tileSize),
         })
       }
       return cache.get(layer.tileset)
@@ -269,17 +306,66 @@ export default function App() {
     level.addProp(assets.selectedId, x, y, propTransform)
   }, [assets.selectedId, level, propTransform])
 
-  const handleRemovePropAt = useCallback((x, y) => {
+  // Topmost placed prop whose VISUAL footprint covers cell (x,y). Props rotate
+  // around their footprint centre (see applyPropTransform), so 90°/270° swap
+  // the extents; hit-test the cell against that rect. Used by the props tool's
+  // right-click remove and by the Select tool.
+  const findPropAt = useCallback((x, y) => {
     for (let i = level.placedProps.length - 1; i >= 0; i--) {
       const p = level.placedProps[i]
       const a = assetsById[p.assetId]
       if (!a) continue
-      if (x >= p.x && x < p.x + a.cols && y >= p.y && y < p.y + a.rows) {
-        level.removeProp(p.id)
-        return
-      }
+      const swap = ((p.rotation || 0) % 180) !== 0
+      const cx = p.x + a.cols / 2
+      const cy = p.y + a.rows / 2
+      const hw = (swap ? a.rows : a.cols) / 2
+      const hh = (swap ? a.cols : a.rows) / 2
+      if (x + 1 > cx - hw && x < cx + hw && y + 1 > cy - hh && y < cy + hh) return p
     }
-  }, [level, assetsById])
+    return null
+  }, [level.placedProps, assetsById])
+
+  const handleRemovePropAt = useCallback((x, y) => {
+    const hit = findPropAt(x, y)
+    if (hit) level.removeProp(hit.id)
+  }, [findPropAt, level])
+
+  // ── Prop selection (Select tool) ──────────────────────────────────────────
+  const [selectedPropId, setSelectedPropId] = useState(null)
+  const selectedProp = useMemo(
+    () => level.placedProps.find(p => p.id === selectedPropId) || null,
+    [level.placedProps, selectedPropId]
+  )
+
+  // Click on the map with the Select tool: select the hit prop (or clear).
+  // Returns the hit so LevelCanvas can start a drag from it.
+  const handleSelectPropAt = useCallback((x, y) => {
+    const hit = findPropAt(x, y)
+    setSelectedPropId(hit?.id ?? null)
+    return hit
+  }, [findPropAt])
+
+  // Drag-move of the selected prop; recordHistory is true only for the first
+  // cell change of a drag so the whole drag is one undo entry.
+  const handleMoveProp = useCallback((id, x, y, recordHistory) => {
+    const cx = Math.max(0, Math.min(level.width - 1, x))
+    const cy = Math.max(0, Math.min(level.height - 1, y))
+    level.updateProp(id, { x: cx, y: cy }, recordHistory)
+  }, [level])
+
+  const handleUpdateSelectedProp = useCallback((patch) => {
+    if (selectedPropId) level.updateProp(selectedPropId, patch)
+  }, [level, selectedPropId])
+
+  const handleMoveSelectedPropZ = useCallback((direction) => {
+    if (selectedPropId) level.movePropZ(selectedPropId, direction)
+  }, [level, selectedPropId])
+
+  const handleDeleteSelectedProp = useCallback(() => {
+    if (!selectedPropId) return
+    level.removeProp(selectedPropId)
+    setSelectedPropId(null)
+  }, [level, selectedPropId])
 
   const setCellPx = useCallback((next) => {
     setCellPxRaw(prev => clampCellPx(typeof next === 'function' ? next(prev) : next))
@@ -294,16 +380,50 @@ export default function App() {
     setCellPx(Math.min(fitW, fitH))
   }, [level.width, level.height, setCellPx])
 
-  const [aiTextures, setAiTextures] = useState(null)
-  const [drawAiMeta, setDrawAiMeta] = useState(null)
-
   useEffect(() => {
     tilesheet.generateFromBiome({ ...BIOMES[0], colors: cloneColors(BIOMES[0].colors) }, tileSize)
   }, []) // eslint-disable-line
 
+  // Per-tile overrides are pixel-exact at one tile size; clear them whenever
+  // the source they were painted over changes (size, biome, AI result, load).
+  const clearTileOverrides = useCallback(() => {
+    setTileOverrides({})
+    setEditingTile(null)
+  }, [])
+
+  const handleEditTile = useCallback((idx) => {
+    const tile = displayTiles?.[idx]
+    if (!tile) return
+    const od = overrideDrawRef.current
+    od.resetCanvas(tileSize)
+    od.loadPixels(tile.data)
+    setEditingTile(idx)
+  }, [displayTiles, tileSize])
+
+  const handleApplyTileEdit = useCallback(() => {
+    if (editingTile == null) return
+    const pixels = new Uint8ClampedArray(overrideDrawRef.current.committedPixels)
+    setTileOverrides(prev => ({ ...prev, [editingTile]: pixels }))
+    setEditingTile(null)
+  }, [editingTile])
+
+  const handleCancelTileEdit = useCallback(() => setEditingTile(null), [])
+
+  const handleResetTileOverride = useCallback(() => {
+    if (editingTile == null) return
+    setTileOverrides(prev => {
+      if (!(editingTile in prev)) return prev
+      const next = { ...prev }
+      delete next[editingTile]
+      return next
+    })
+    setEditingTile(null)
+  }, [editingTile])
+
   const handleTileSizeChange = (newSize) => {
     setTileSize(newSize)
     drawing.resetCanvas(newSize)
+    clearTileOverrides()
     if (mode === 'procedural') {
       const palette = editorTileset.colors
       if (aiTextures?.center) {
@@ -317,16 +437,23 @@ export default function App() {
     }
   }
 
-  // Keyboard shortcuts (tileset draw mode only)
+  // Keyboard shortcuts: tile-override editor (any mode) or the base drawing
+  // canvas (draw mode).
   useEffect(() => {
     const handleKey = (e) => {
-      if (activeView !== 'editor' || editorKind !== 'tileset' || mode !== 'draw') return
-      if (e.ctrlKey && e.key === 'z') { e.preventDefault(); drawingRef.current.undo() }
-      if (e.ctrlKey && e.key === 'y') { e.preventDefault(); drawingRef.current.redo() }
+      if (activeView !== 'editor' || editorKind !== 'tileset') return
+      const tag = e.target?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable) return
+      const target = editingTile != null
+        ? overrideDrawRef.current
+        : (mode === 'draw' ? drawingRef.current : null)
+      if (!target) return
+      if (e.ctrlKey && e.key === 'z') { e.preventDefault(); target.undo() }
+      if (e.ctrlKey && e.key === 'y') { e.preventDefault(); target.redo() }
     }
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
-  }, [activeView, editorKind, mode])
+  }, [activeView, editorKind, mode, editingTile])
 
   const handleGenerate = () => {
     if (mode === 'draw') {
@@ -367,8 +494,9 @@ export default function App() {
     })
     setAiTextures(null)
     setDrawAiMeta(null)
+    clearTileOverrides()
     tilesheet.generateFromBiome(fresh, tileSize)
-  }, [tileSize, tilesheet])
+  }, [tileSize, tilesheet, clearTileOverrides])
 
   const handleColorChange = (key, value) => {
     setEditorTileset(prev => ({
@@ -410,12 +538,13 @@ export default function App() {
   const handleAITile = useCallback((pixels, result) => {
     drawing.loadPixels(pixels)
     setDrawAiMeta(result?.meta ? { base: result.meta } : null)
+    clearTileOverrides()
     setEditorTileset(prev => ({
       ...prev,
       savedId: null,
       isCustom: true,
     }))
-  }, [drawing])
+  }, [drawing, clearTileOverrides])
 
   const handleAIProcedural = useCallback((centerPixels, edgePixels, result) => {
     const center = new Uint8ClampedArray(centerPixels)
@@ -429,6 +558,7 @@ export default function App() {
     } : null
     setAiTextures({ center, edge, ai })
     setDrawAiMeta(null)
+    clearTileOverrides()
     setEditorTileset(prev => ({
       ...prev,
       savedId: null,
@@ -443,9 +573,14 @@ export default function App() {
       colors: cloneColors(editorTileset.colors),
       ai,
     })
-  }, [tileSize, tilesheet, editorTileset])
+  }, [tileSize, tilesheet, editorTileset, clearTileOverrides])
 
   const currentTilesetDefinition = useCallback(() => {
+    // Hand-edited tiles ride in the definition as { index: base64 }.
+    const overrideKeys = Object.keys(tileOverrides)
+    const overridesOut = overrideKeys.length
+      ? { overrides: Object.fromEntries(overrideKeys.map(k => [k, bytesToBase64(tileOverrides[k])])) }
+      : {}
     if (mode === 'draw') {
       // Persist the palette inferred from the drawing's own pixels (so the saved
       // swatches reflect the art), falling back to the current swatches.
@@ -456,6 +591,7 @@ export default function App() {
         label: editorTileset.name,
         colors: inferred,
         ...(drawAiMeta ? { ai: drawAiMeta } : {}),
+        ...overridesOut,
       }
     }
     if (aiTextures) return {
@@ -466,9 +602,17 @@ export default function App() {
       label: editorTileset.name,
       colors: editorTileset.colors,
       ...(aiTextures.ai ? { ai: aiTextures.ai } : {}),
+      ...overridesOut,
     }
-    return { mode: 'procedural', biomeId: editorTileset.biomeId, label: editorTileset.name, colors: editorTileset.colors }
-  }, [mode, drawing.committedPixels, editorTileset, aiTextures, drawAiMeta])
+    return {
+      mode: 'procedural',
+      biomeId: editorTileset.biomeId,
+      label: editorTileset.name,
+      colors: editorTileset.colors,
+      ...(animFrameCount > 1 ? { animationFrames: animFrameCount } : {}),
+      ...overridesOut,
+    }
+  }, [mode, drawing.committedPixels, editorTileset, aiTextures, drawAiMeta, tileOverrides, animFrameCount])
 
   // `generate` controls whether the 48-tile sheet is rendered here. The editor
   // tileset-load path passes false because the saved-tileset effect regenerates
@@ -476,6 +620,13 @@ export default function App() {
   // in level view). Avoids rendering the sheet 2-3× per selection.
   const applyTilesetDefinition = useCallback((def, size, generate = true) => {
     if (!def) return
+    // Restore the definition's hand-edited tiles (or clear stale ones), and its
+    // animation frame count (procedural only — other modes can't animate).
+    setEditingTile(null)
+    setTileOverrides(decodeDefinitionOverrides(def) || {})
+    setAnimFrameCount(def.mode === 'procedural' || (!def.mode && def.biomeId)
+      ? Math.max(1, Math.min(MAX_ANIM_FRAMES, def.animationFrames | 0)) || 1
+      : 1)
     if (def.mode === 'draw') {
       setMode('draw')
       setAiTextures(null)
@@ -692,6 +843,7 @@ export default function App() {
     if (mainDef) { const bytes = applyTilesetDefinition(mainDef, size); if (bytes) drawing.loadPixels(bytes) }
     level.loadState({ width: row.width, height: row.height, layers: loadedLayers, placedProps: row.placed_props })
     level.setSeamlessEdges(!!row.seamless_edges)
+    setSelectedPropId(null)
   }, [drawing, applyTilesetDefinition, level, tileSize])
 
   const handleSurprise = useCallback(() => {
@@ -699,8 +851,13 @@ export default function App() {
     level.generate(keys[Math.floor(Math.random() * keys.length)])
   }, [level])
 
+  // The erase decision (right button or eraser tool) is made once at stroke
+  // start and held in a ref, so a right-button DRAG keeps erasing — continue
+  // events don't carry the mouse button.
+  const terrainStrokeErase = useRef(false)
   const handleTerrainStart = useCallback((x, y, erase, brushSize = 1) => {
     const shouldErase = erase || terrainTool === 'eraser'
+    terrainStrokeErase.current = shouldErase
     const targetManual = activeLayer?.kind === 'manual'
     if (targetManual) {
       level.paintManualArea(x, y, shouldErase ? -1 : manualSelectedTile, brushSize)
@@ -711,16 +868,15 @@ export default function App() {
   }, [level, activeLayer, manualSelectedTile, terrainTool])
 
   const handleTerrainContinue = useCallback((x, y, brushSize = 1) => {
+    const shouldErase = terrainStrokeErase.current
     const targetManual = activeLayer?.kind === 'manual'
     if (targetManual) {
-      const erase = terrainTool === 'eraser'
-      level.paintManualArea(x, y, erase ? -1 : manualSelectedTile, brushSize)
+      level.paintManualArea(x, y, shouldErase ? -1 : manualSelectedTile, brushSize)
       return
     }
-    const erase = terrainTool === 'eraser'
-    level.paintArea(x, y, erase ? 0 : 1, brushSize)
+    level.paintArea(x, y, shouldErase ? 0 : 1, brushSize)
     level.clearManualArea(x, y, brushSize)
-  }, [level, activeLayer, terrainTool, manualSelectedTile])
+  }, [level, activeLayer, manualSelectedTile])
 
   const handleTerrainFill = useCallback((x, y, erase) => {
     const shouldErase = erase || terrainTool === 'eraser'
@@ -845,10 +1001,16 @@ export default function App() {
             mode={mode} setMode={setMode} tileSize={tileSize}
             biome={editorTileset} onColorChange={handleColorChange}
             onResetColors={handleResetBiomeColors} onShuffleColors={handleShuffleBiomeColors}
-            drawing={drawing} tiles={tilesheet.tiles}
+            drawing={drawing} tiles={displayTiles}
             onGenerate={handleGenerate} onAITile={handleAITile} onAIProcedural={handleAIProcedural}
             biomeId={editorTileset.biomeId} savedCount={tilesets.tilesets.length}
             editorKind={editorKind} setEditorKind={setEditorKind}
+            editingTile={editingTile} overrideDraw={overrideDraw}
+            overriddenTiles={Object.keys(tileOverrides).map(Number)}
+            onEditTile={handleEditTile} onApplyTileEdit={handleApplyTileEdit}
+            onCancelTileEdit={handleCancelTileEdit} onResetTileOverride={handleResetTileOverride}
+            animFrameCount={animFrameCount} setAnimFrameCount={setAnimFrameCount}
+            canAnimate={!aiTextures} animFrames={editorAnimFrames}
           />
           {galleryDock}
         </>
@@ -867,7 +1029,7 @@ export default function App() {
         <Suspense fallback={<div className="level-empty">Loading…</div>}>
           <LevelsWorkspace
             levelMode={levelMode} setLevelMode={setLevelMode}
-            level={level} tiles={tilesheet.tiles} tileSize={tileSize}
+            level={level} tiles={displayTiles} tileSize={tileSize}
             cellPx={cellPx} setCellPx={setCellPx}
             showGrid={showLevelGrid} setShowGrid={setShowLevelGrid}
             onFit={handleFitLevel} levelCanvasAreaRef={levelCanvasAreaRef}
@@ -880,6 +1042,11 @@ export default function App() {
             selectedAssetId={assets.selectedId} onSelectAsset={assets.select}
             propTransform={propTransform} setPropTransform={setPropTransform}
             onPlaceProp={handlePlaceProp} onRemovePropAt={handleRemovePropAt}
+            selectedProp={selectedProp}
+            onSelectPropAt={handleSelectPropAt} onMoveProp={handleMoveProp}
+            onUpdateSelectedProp={handleUpdateSelectedProp}
+            onMoveSelectedPropZ={handleMoveSelectedPropZ}
+            onDeleteSelectedProp={handleDeleteSelectedProp}
             onTerrainStart={handleTerrainStart} onTerrainContinue={handleTerrainContinue}
             onTerrainFill={handleTerrainFill} onTerrainRect={handleTerrainRect} onTerrainPick={handleTerrainPick}
             onFillActiveLayer={handleFillActiveLayer} onClearActiveLayer={handleClearActiveLayer}

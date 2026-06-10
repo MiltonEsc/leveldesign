@@ -99,6 +99,27 @@ test('tiledMap encodes empty as gid 0 and tiles as firstgid + index', () => {
   assert.ok(map.layers.some(l => l.type === 'objectgroup' && l.objects.length === 1))
 })
 
+test('animated tilesets append frame blocks and emit Tiled animation entries', () => {
+  const frames = [new Array(48).fill(null).map(() => ({}))] // one extra frame
+  const lt = [{ tiles: new Array(48).fill(null).map(() => ({})), tileSize: 16, frames }]
+  const model = buildLevelModel({ level: fakeLevel(), layerTiles: lt, tileSize: 16 })
+  const ts = model.tilesets[0]
+  assert.equal(ts.frameCount, 1)
+  assert.equal(ts.frameStart, 48) // no variants → frames right after the base block
+  assert.equal(ts.tileCount, 96)
+
+  const map = tiledMap(model, 'level_3x2')
+  const entry = map.tilesets[0]
+  assert.equal(entry.tilecount, 96)
+  assert.equal(entry.tiles.length, 47) // every autotile id gets an animation
+  assert.deepEqual(entry.tiles[0].animation.map(a => a.tileid), [1, 49]) // id 1 → frame copy at 48+1
+  assert.ok(entry.tiles[0].animation.every(a => a.duration > 0))
+
+  const json = genericJson(model, 'level_3x2')
+  assert.equal(json.tilesets[0].animation.frameCount, 1)
+  assert.equal(json.tilesets[0].animation.frameStart, 48)
+})
+
 test('genericJson carries flat per-layer data and tileset refs', () => {
   const model = buildLevelModel(ctx)
   const json = genericJson(model, 'level_3x2')

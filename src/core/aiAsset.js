@@ -27,7 +27,9 @@ const BG_SOLID =
   'Do not use magenta inside the prop itself. Subject: '
 
 const CHROMA_TOLERANCE = 60
-const POSTERIZE_LEVELS = 999
+// Levels per RGB channel. Was 999 (a no-op — the rounding step collapsed to
+// ~1); 6 actually flattens the AI's soft gradients into pixel-art color bands.
+const POSTERIZE_LEVELS = 6
 const ALPHA_THRESHOLD = 128
 
 function chromaKey(data, w, h, tolerance = CHROMA_TOLERANCE) {

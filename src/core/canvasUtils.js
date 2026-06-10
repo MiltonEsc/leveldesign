@@ -123,6 +123,24 @@ export function translatePixels(data, width, height, dx, dy) {
   return out
 }
 
+// Bresenham walk: calls visit(x, y) for every cell on the line from (x0,y0) to
+// (x1,y1), endpoints included. Used to fill the gaps between mouse-move events
+// so fast strokes don't skip pixels.
+export function forEachCellOnLine(x0, y0, x1, y1, visit) {
+  let x = x0, y = y0
+  const dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0)
+  const sx = x0 < x1 ? 1 : -1
+  const sy = y0 < y1 ? 1 : -1
+  let err = dx - dy
+  while (true) {
+    visit(x, y)
+    if (x === x1 && y === y1) break
+    const e2 = 2 * err
+    if (e2 > -dy) { err -= dy; x += sx }
+    if (e2 < dx)  { err += dx; y += sy }
+  }
+}
+
 // Bresenham line, painting a brush at each step
 export function drawLineInto(data, width, height, x0, y0, x1, y1, brush, rgba) {
   let dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0)

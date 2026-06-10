@@ -82,11 +82,15 @@ export function AssetsView({ tileSize, gallery, editorKind, setEditorKind }) {
     setZoom(z => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z + delta)))
   }, [])
 
-  // Keyboard shortcuts: Ctrl+Z / Ctrl+Y
+  // Keyboard shortcuts: Ctrl+Z / Ctrl+Y (ignored while typing in a field, so
+  // the name input keeps its native text undo).
   useEffect(() => {
     const handleKey = (e) => {
-      if (e.ctrlKey && e.key === 'z') { e.preventDefault(); editor.undo() }
-      if (e.ctrlKey && e.key === 'y') { e.preventDefault(); editor.redo() }
+      if (!e.ctrlKey) return
+      const tag = e.target?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable) return
+      if (e.key === 'z') { e.preventDefault(); editor.undo() }
+      if (e.key === 'y') { e.preventDefault(); editor.redo() }
     }
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)

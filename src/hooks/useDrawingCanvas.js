@@ -57,17 +57,36 @@ export function useDrawingCanvas(tileSize) {
     setHistoryIndex(prev => Math.min(prev + 1, MAX_HISTORY - 1))
   }, [historyIndex])
 
+  // History holds the PRE-state of each op (pushed at stroke start); the current
+  // pixels live outside it. Undo restores history[historyIndex] and parks the
+  // current pixels in that slot so redo can come back to them.
   const undo = useCallback(() => {
-    if (historyIndex <= 0) return
-    const prevState = history[historyIndex - 1]
-    if (prevState) { setPixels(new Uint8ClampedArray(prevState)); setHistoryIndex(i => i - 1) }
-  }, [history, historyIndex])
+    if (historyIndex < 0) return
+    const prevState = history[historyIndex]
+    if (!prevState) return
+    const idx = historyIndex
+    setHistory(prev => {
+      const next = [...prev]
+      next[idx] = new Uint8ClampedArray(pixels)
+      return next
+    })
+    setPixels(new Uint8ClampedArray(prevState))
+    setHistoryIndex(i => i - 1)
+  }, [history, historyIndex, pixels])
 
   const redo = useCallback(() => {
     if (historyIndex >= history.length - 1) return
     const nextState = history[historyIndex + 1]
-    if (nextState) { setPixels(new Uint8ClampedArray(nextState)); setHistoryIndex(i => i + 1) }
-  }, [history, historyIndex])
+    if (!nextState) return
+    const idx = historyIndex + 1
+    setHistory(prev => {
+      const next = [...prev]
+      next[idx] = new Uint8ClampedArray(pixels)
+      return next
+    })
+    setPixels(new Uint8ClampedArray(nextState))
+    setHistoryIndex(i => i + 1)
+  }, [history, historyIndex, pixels])
 
   const rgbaFor = useCallback((isErase) => isErase ? ERASE_RGBA : hexToRGBA(activeColor), [activeColor])
 
@@ -164,7 +183,7 @@ export function useDrawingCanvas(tileSize) {
     clear,
     loadPixels,
     getImageData,
-    canUndo: historyIndex > 0,
+    canUndo: historyIndex >= 0,
     canRedo: historyIndex < history.length - 1,
   }
 }
