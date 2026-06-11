@@ -232,10 +232,14 @@ function makeEmptyTileData(s) {
 }
 
 // Composes all 48 tiles from a CENTER texture + an EDGE source. `edgeData` is an
-// ImageData (e.g. an AI snow texture) or null → a textured edge is synthesized
-// from the biome's border/shadow/highlight palette. Always autotiles correctly
-// because tiles are composed (not cropped from an AI sheet).
-export function generateTilesFromTextures(centerData, edgeData, tileSize, biomeColors) {
+// ImageData (e.g. an AI snow texture) or null → the edge is synthesized by
+// DARKENING the center texture itself (with the usual speckle variation), so the
+// border always matches the material — a palette can't know what the AI drew
+// (the old palette-speckle edge gave e.g. a lava center pale grass-green
+// borders when the active biome was grass). Always autotiles correctly because
+// tiles are composed (not cropped from an AI sheet). `biomeColors` is kept for
+// signature compatibility but no longer drives the synthesized edge.
+export function generateTilesFromTextures(centerData, edgeData, tileSize, biomeColors) { // eslint-disable-line no-unused-vars
   const s = tileSize
   const center = centerData.data
   const ew = Math.max(2, Math.round(s / 6))
@@ -245,13 +249,17 @@ export function generateTilesFromTextures(centerData, edgeData, tileSize, biomeC
     edge = edgeData.data
   } else {
     edge = new Uint8ClampedArray(s * s * 4)
-    const bo = hexToRGBA(biomeColors.border)
-    const sh = hexToRGBA(biomeColors.shadow)
-    const hi = hexToRGBA(biomeColors.highlight)
     for (let y = 0; y < s; y++) {
       for (let x = 0; x < s; x++) {
-        const c = edgeColor(x, y, EDGE_SEED, bo, sh, hi)
-        setPixelRGBA(edge, x, y, s, c[0], c[1], c[2], 255)
+        const r = rnd(x, y, EDGE_SEED)
+        // Mostly a 0.45 darken (like draw mode's exposed edges), with scattered
+        // darker "shadow" and lighter "highlight" speckles for texture.
+        const f = r < 0.24 ? 0.30 : r > 0.80 ? 0.62 : 0.45
+        const i = getPixelIdx(x, y, s)
+        edge[i]     = center[i] * f
+        edge[i + 1] = center[i + 1] * f
+        edge[i + 2] = center[i + 2] * f
+        edge[i + 3] = 255
       }
     }
   }

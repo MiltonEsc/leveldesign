@@ -551,7 +551,11 @@ export default function App() {
     const edge   = edgePixels ? new Uint8ClampedArray(edgePixels) : null
     const centerData = new ImageData(center, tileSize, tileSize)
     const edgeData   = edge ? new ImageData(edge, tileSize, tileSize) : null
-    tilesheet.generateFromTextures(centerData, edgeData, tileSize, editorTileset.colors)
+    // Reflect the AI material in the palette swatches (and the saved colors)
+    // instead of keeping the previously active biome's palette — a lava center
+    // shouldn't carry grass-green swatches into the gallery thumbnail.
+    const inferred = inferColorsFromTiles([{ data: center }]) || editorTileset.colors
+    tilesheet.generateFromTextures(centerData, edgeData, tileSize, inferred)
     const ai = result ? {
       center: result.center?.meta || null,
       edge: result.edge?.meta || null,
@@ -561,6 +565,8 @@ export default function App() {
     clearTileOverrides()
     setEditorTileset(prev => ({
       ...prev,
+      colors: cloneColors(inferred),
+      baseColors: cloneColors(inferred),
       savedId: null,
       isCustom: true,
     }))
@@ -570,7 +576,7 @@ export default function App() {
       edgePixels: edge ? bytesToBase64(edge) : null,
       biomeId: editorTileset.biomeId,
       label: editorTileset.name,
-      colors: cloneColors(editorTileset.colors),
+      colors: cloneColors(inferred),
       ai,
     })
   }, [tileSize, tilesheet, editorTileset, clearTileOverrides])

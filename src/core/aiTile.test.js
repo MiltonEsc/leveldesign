@@ -127,6 +127,35 @@ test('AI texture composition still creates 48 tiles for all supported grid sizes
   }
 })
 
+test('synthesized edge (no edge texture) derives from the center, not the palette', () => {
+  const size = 16
+  // Solid red "lava" center; the active palette is deliberately green.
+  const center = new Uint8ClampedArray(size * size * 4)
+  for (let i = 0; i < center.length; i += 4) {
+    center[i] = 200; center[i + 1] = 40; center[i + 2] = 30; center[i + 3] = 255
+  }
+  const tiles = procedural.generateTilesFromTextures(
+    new ImageData(center, size, size),
+    null, // no edge texture → synthesized
+    size,
+    { border: '#223311', shadow: '#112211', highlight: '#99aa66' }, // green palette must NOT leak in
+  )
+  // Index 1 = the isolated tile (bitmask 0): every edge is painted. Its corner
+  // pixel must be a darkened red — never the palette's green.
+  const px = tiles[1].data
+  assert.ok(px[0] > px[1], 'edge keeps the center hue (red > green)')
+  assert.ok(px[0] > px[2], 'edge keeps the center hue (red > blue)')
+  assert.ok(px[0] < 200, 'edge is darker than the center')
+  assert.ok(px[0] > 0, 'edge is not black')
+  // An explicit edge texture still wins over synthesis.
+  const blue = new Uint8ClampedArray(size * size * 4)
+  for (let i = 0; i < blue.length; i += 4) { blue[i + 2] = 220; blue[i + 3] = 255 }
+  const withEdge = procedural.generateTilesFromTextures(
+    new ImageData(center, size, size), new ImageData(blue, size, size), size, {},
+  )
+  assert.ok(withEdge[1].data[2] > withEdge[1].data[0], 'explicit edge texture is used as-is')
+})
+
 test('generateAllBiomeTiles memoizes by colors + params, not just identity', () => {
   const colors = { primary: '#445533', secondary: '#667744', border: '#223311', highlight: '#99aa66', shadow: '#112211' }
   const proceduralParams = { edgeWidth: 2, dither: true, ditherStrength: 0.35, cornerStyle: 'organic' }
