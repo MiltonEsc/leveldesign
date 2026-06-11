@@ -129,10 +129,19 @@ test('AI texture composition still creates 48 tiles for all supported grid sizes
 
 test('synthesized edge (no edge texture) derives from the center, not the palette', () => {
   const size = 16
-  // Solid red "lava" center; the active palette is deliberately green.
+  // Red "lava" center WITH a white artifact band in its bottom rows (AI images
+  // often carry bands/watermark remnants at their boundary); the active palette
+  // is deliberately green.
   const center = new Uint8ClampedArray(size * size * 4)
-  for (let i = 0; i < center.length; i += 4) {
-    center[i] = 200; center[i + 1] = 40; center[i + 2] = 30; center[i + 3] = 255
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = (y * size + x) * 4
+      const artifact = y >= size - 2
+      center[i] = artifact ? 255 : 200
+      center[i + 1] = artifact ? 255 : 40
+      center[i + 2] = artifact ? 255 : 30
+      center[i + 3] = 255
+    }
   }
   const tiles = procedural.generateTilesFromTextures(
     new ImageData(center, size, size),
@@ -140,13 +149,20 @@ test('synthesized edge (no edge texture) derives from the center, not the palett
     size,
     { border: '#223311', shadow: '#112211', highlight: '#99aa66' }, // green palette must NOT leak in
   )
-  // Index 1 = the isolated tile (bitmask 0): every edge is painted. Its corner
-  // pixel must be a darkened red — never the palette's green.
+  // Index 1 = the isolated tile (bitmask 0): every edge is painted. Corner
+  // pixels must be a darkened red — never the palette's green, and never the
+  // artifact's white copied from the center's boundary rows.
   const px = tiles[1].data
-  assert.ok(px[0] > px[1], 'edge keeps the center hue (red > green)')
-  assert.ok(px[0] > px[2], 'edge keeps the center hue (red > blue)')
-  assert.ok(px[0] < 200, 'edge is darker than the center')
-  assert.ok(px[0] > 0, 'edge is not black')
+  const top = [px[0], px[1], px[2]]
+  const bi = ((size - 1) * size) * 4 // bottom-left corner
+  const bottom = [px[bi], px[bi + 1], px[bi + 2]]
+  for (const [r, g, b] of [top, bottom]) {
+    assert.ok(r > g, 'edge keeps the center hue (red > green)')
+    assert.ok(r > b, 'edge keeps the center hue (red > blue)')
+    assert.ok(r < 200, 'edge is darker than the center')
+    assert.ok(r > 0, 'edge is not black')
+    assert.ok(g < 150, 'edge does not copy the white artifact band')
+  }
   // An explicit edge texture still wins over synthesis.
   const blue = new Uint8ClampedArray(size * size * 4)
   for (let i = 0; i < blue.length; i += 4) { blue[i + 2] = 220; blue[i + 3] = 255 }
