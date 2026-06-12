@@ -42,7 +42,25 @@ test('buildImageRequestBody uses Gemini image generation defaults', () => {
 test('providerForModel maps each model to its API provider', () => {
   assert.equal(aiTile.providerForModel('gemini-2.5-flash-image'), 'gemini')
   assert.equal(aiTile.providerForModel('gpt-image-1'), 'openai')
+  assert.equal(aiTile.providerForModel('fal-ai/flux/schnell'), 'fal')
+  assert.equal(aiTile.providerForModel('fal-ai/flux/dev'), 'fal')
   assert.equal(aiTile.providerForModel('unknown-model'), 'gemini')
+})
+
+test('buildFalRequestBody requests inline sync_mode square images', () => {
+  const png = aiTile.buildFalRequestBody('fal-ai/flux/schnell', 'lava rock', { outputFormat: 'png' })
+  assert.equal(png.prompt, 'lava rock')
+  assert.equal(png.image_size, 'square_hd')
+  assert.equal(png.num_images, 1)
+  assert.equal(png.sync_mode, true)            // returns a data-URI, not a CDN url
+  assert.equal(png.output_format, 'png')
+  assert.equal(png.num_inference_steps, undefined) // schnell keeps its own default
+
+  // Any non-png outputFormat falls back to jpeg.
+  const jpg = aiTile.buildFalRequestBody('fal-ai/flux/dev', 'lava rock', { outputFormat: 'webp' })
+  assert.equal(jpg.output_format, 'jpeg')
+  // Default (no opts) is png per DEFAULT_OUTPUT_FORMAT.
+  assert.equal(aiTile.buildFalRequestBody('fal-ai/flux/schnell', 'x').output_format, 'png')
 })
 
 test('edge prompt includes role-specific border guidance', () => {

@@ -22,7 +22,7 @@ npm run build      # production build to dist/
 npm run preview    # preview the production build
 ```
 
-`.env.local` (git-ignored) provides the AI keys — `VITE_GEMINI_API_KEY` and/or `VITE_OPENAI_API_KEY` (the active model's provider decides which is used) — plus `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` (persistence). Keys are **read from env only — there is no API-key field in the UI** (it was removed; ⚠️ `VITE_*` vars are still bundled into the client at build time, so this hides the key from the UI but isn't true secrecy — proxy through a backend for that). Without the Supabase vars, the gallery hooks load empty and set an `error`. DB schema lives in `supabase/migrations/` (see Persistence).
+`.env.local` (git-ignored) provides the AI keys — `VITE_GEMINI_API_KEY`, `VITE_OPENAI_API_KEY` and/or `VITE_FAL_API_KEY` (the active model's provider decides which is used; fal.ai/FLUX is the cheap option) — plus `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` (persistence). Keys are **read from env only — there is no API-key field in the UI** (it was removed; ⚠️ `VITE_*` vars are still bundled into the client at build time, so this hides the key from the UI but isn't true secrecy — proxy through a backend for that). Without the Supabase vars, the gallery hooks load empty and set an `error`. DB schema lives in `supabase/migrations/` (see Persistence).
 
 The pure core logic has a small **`node --test`** suite — `npm test` runs `src/core/*.test.js` (bitmask/export/generator/idea/variant coverage). There is no linter and no UI/hook test runner; verify UI changes by running `npm run dev` and exercising the app (Playwright is a devDependency and is used for manual smoke tests; see git history of how it was driven).
 
@@ -91,16 +91,17 @@ The whole UI uses a single locked **pixel** theme (ported from a standalone mock
 - **Styling**: one global [src/App.css](src/App.css) with CSS custom properties (`--bg`, `--accent`, etc.). Class-based, no CSS modules. Dark theme with a more modern generator-like left sidebar and glassy workspace panels.
 - Code and comments are in English; the app author communicates in Spanish.
 
-## AI base-tile generation (Gemini + OpenAI)
+## AI base-tile generation (Gemini + OpenAI + fal)
 
-[src/core/aiTile.js](src/core/aiTile.js) + [AITilePanel.jsx](src/components/Generator/AITilePanel.jsx) generate a base tile from a text prompt. **Two providers, picked per model** via `providerForModel(modelId)`:
+[src/core/aiTile.js](src/core/aiTile.js) + [AITilePanel.jsx](src/components/Generator/AITilePanel.jsx) generate a base tile from a text prompt. **Three providers, picked per model** via `providerForModel(modelId)`:
 
-- `AI_MODELS` (aiTile.js) tags each model with a `provider`: **Gemini** (`gemini-2.5-flash-image` default, `gemini-3-pro-image`) and **OpenAI** (`gpt-image-1`, `gpt-image-1-mini`). `generateImage({prompt, model, quality, outputFormat})` resolves the provider, gets the matching key from env, and dispatches.
+- `AI_MODELS` (aiTile.js) tags each model with a `provider`: **Gemini** (`gemini-2.5-flash-image` default, `gemini-3-pro-image`), **OpenAI** (`gpt-image-1`, `gpt-image-1-mini`) and **fal** (`fal-ai/flux/schnell`, `fal-ai/flux/dev` — FLUX, the cheapest option). `generateImage({prompt, model, quality, outputFormat})` resolves the provider, gets the matching key from env, and dispatches.
 - **Gemini request** (`buildImageRequestBody`): endpoint **`v1beta`** `:generateContent`, header `x-goog-api-key`. `generationConfig` uses `responseModalities: ['IMAGE']` + **`imageConfig: { aspectRatio }`**. ⚠️ Do **not** use `responseFormat` or the `v1` endpoint — both make the API reject the body with *"Unknown name responseFormat / responseModalities at generation_config"* (the original bug). Image bytes come back as `candidates[].content.parts[].inlineData.data` (base64).
 - **OpenAI request** (`requestOpenAIImage`): endpoint `v1/images/generations`, header `Authorization: Bearer`, body `{model, prompt, n, size:'1024x1024', quality}`. Returns `data[0].b64_json`. Don't send `response_format` (retired).
-- **Keys come from `.env.local` only** — `resolveApiKey(provider)` reads `VITE_OPENAI_API_KEY` / `VITE_GEMINI_API_KEY`. **There is no key field in the UI** (removed for safety). ⚠️ The file must be named exactly `.env.local`; `VITE_*` is bundled into the client (not secret in a deployed build).
-- In dev, requests go through **Vite proxies** ([vite.config.js](vite.config.js)): `/gemini` → `generativelanguage.googleapis.com`, `/openai` → `api.openai.com`. The client picks `/gemini/v1beta` or `/openai/v1` when `import.meta.env.DEV`.
-- Gemini's default model gets a same-provider fallback (`FALLBACK_IMAGE_MODEL`); OpenAI models don't fall back.
+- **fal request** (`requestFalImage` / `buildFalRequestBody`): endpoint `${FAL_BASE}/<model>` (e.g. `fal.run/fal-ai/flux/schnell`), header `Authorization: Key`, body `{prompt, image_size:'square_hd', num_images:1, sync_mode:true, enable_safety_checker:true, output_format}`. **`sync_mode:true` makes fal return the image inline as a data-URI** (in `images[0].url`) instead of a CDN URL, so there's no polling or cross-origin canvas tainting — `runFalAttempt` passes that url straight to `decodeGeneratedImage`. Defaults to PNG (`output_format`); FLUX `schnell` keeps its own 4-step default (no `num_inference_steps` pinned).
+- **Keys come from `.env.local` only** — `resolveApiKey(provider)` reads `VITE_OPENAI_API_KEY` / `VITE_FAL_API_KEY` / `VITE_GEMINI_API_KEY`. **There is no key field in the UI** (removed for safety). ⚠️ The file must be named exactly `.env.local`; `VITE_*` is bundled into the client (not secret in a deployed build).
+- In dev, requests go through **Vite proxies** ([vite.config.js](vite.config.js)): `/gemini` → `generativelanguage.googleapis.com`, `/openai` → `api.openai.com`, `/fal` → `fal.run`. The client picks `/gemini/v1beta`, `/openai/v1` or `/fal` when `import.meta.env.DEV`.
+- Gemini's default model gets a same-provider fallback (`FALLBACK_IMAGE_MODEL`); OpenAI and fal models don't fall back.
 - `AITilePanel` is a **generator card** with a prompt box, preset chips, a model selector (Gemini + OpenAI options), and a **Generate Tileset** CTA — no key field.
 
 ### AI scenery props

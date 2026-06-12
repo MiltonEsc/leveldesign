@@ -19,6 +19,9 @@ const QUANT_FORMULA = 'euclidean-bt709'
 // Exported so the text-generation path (aiText.js) reuses the same dev proxies.
 export const GEMINI_BASE = import.meta.env?.DEV ? '/gemini/v1beta' : 'https://generativelanguage.googleapis.com/v1beta'
 export const OPENAI_BASE = import.meta.env?.DEV ? '/openai/v1' : 'https://api.openai.com/v1'
+// fal.ai (FLUX). Synchronous endpoint: POST /<model> returns the image inline
+// (a data-URI) when sync_mode is set, so no polling / CDN-CORS handling needed.
+export const FAL_BASE = import.meta.env?.DEV ? '/fal' : 'https://fal.run'
 const DEFAULT_IMAGE_MODEL = 'gemini-2.5-flash-image'
 const FALLBACK_IMAGE_MODEL = 'gemini-2.5-flash-image'
 const DEFAULT_QUALITY = 'high'
@@ -30,6 +33,8 @@ export const AI_MODELS = [
   { id: 'gemini-3-pro-image',     label: 'Gemini 3 Pro Image',     provider: 'gemini' },
   { id: 'gpt-image-1',            label: 'GPT Image 1',            provider: 'openai' },
   { id: 'gpt-image-1-mini',       label: 'GPT Image 1 Mini',       provider: 'openai' },
+  { id: 'fal-ai/flux/schnell',    label: 'FLUX.1 schnell (fal)',   provider: 'fal' },
+  { id: 'fal-ai/flux/dev',        label: 'FLUX.1 dev (fal)',       provider: 'fal' },
 ]
 
 export function providerForModel(model) {
@@ -41,6 +46,7 @@ export function providerForModel(model) {
 export function resolveApiKey(provider) {
   const env = import.meta.env || {}
   if (provider === 'openai') return env.VITE_OPENAI_API_KEY || ''
+  if (provider === 'fal') return env.VITE_FAL_API_KEY || ''
   return env.VITE_GEMINI_API_KEY || ''
 }
 
@@ -150,11 +156,44 @@ async function requestOpenAIImage(apiKey, model, prompt, { quality = DEFAULT_QUA
   })
 }
 
+// fal.ai (FLUX) request body. `sync_mode: true` makes fal.run return the image
+// inline as a data-URI instead of uploading it to a CDN, so we never deal with
+// polling or cross-origin canvas tainting. schnell uses 4 steps by default; we
+// don't pin num_inference_steps so each FLUX variant keeps its own default.
+export function buildFalRequestBody(model, prompt, { outputFormat = DEFAULT_OUTPUT_FORMAT } = {}) {
+  return {
+    prompt,
+    image_size: 'square_hd', // 1024×1024, matches the OpenAI square path
+    num_images: 1,
+    sync_mode: true,
+    enable_safety_checker: true,
+    output_format: outputFormat === 'png' ? 'png' : 'jpeg',
+  }
+}
+
+async function requestFalImage(apiKey, model, prompt, { outputFormat = DEFAULT_OUTPUT_FORMAT } = {}) {
+  return fetch(`${FAL_BASE}/${model}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Key ${apiKey}`,
+    },
+    body: JSON.stringify(buildFalRequestBody(model, prompt, { outputFormat })),
+  })
+}
+
+const PROVIDER_LABEL = { openai: 'OpenAI', fal: 'fal', gemini: 'Gemini' }
+
 async function readError(res, provider) {
-  let msg = `${provider === 'openai' ? 'OpenAI' : 'Gemini'} request failed (HTTP ${res.status}).`
+  let msg = `${PROVIDER_LABEL[provider] || 'Gemini'} request failed (HTTP ${res.status}).`
   try {
     const err = await res.json()
+    // Gemini/OpenAI use { error: { message } }; fal uses { detail } (string or
+    // an array of validation issues) or { message }.
     if (err?.error?.message) msg = err.error.message
+    else if (typeof err?.detail === 'string') msg = err.detail
+    else if (Array.isArray(err?.detail) && err.detail[0]?.msg) msg = err.detail[0].msg
+    else if (err?.message) msg = err.message
   } catch {
     // Ignore parse error.
   }
@@ -235,6 +274,21 @@ async function runOpenAIAttempt(apiKey, model, prompt, { quality }) {
   return { decoded, mimeType }
 }
 
+async function runFalAttempt(apiKey, model, prompt, { outputFormat }) {
+  const res = await requestFalImage(apiKey, model, prompt, { outputFormat })
+  if (!res.ok) throw new Error(await readError(res, 'fal'))
+
+  const json = await res.json()
+  const img = json?.images?.[0]
+  const url = img?.url
+  if (!url) throw new Error('No image returned by the fal API.')
+
+  const mimeType = img.content_type || 'image/png'
+  // With sync_mode the url is a data-URI (no CORS); a CDN url needs crossOrigin.
+  const decoded = await decodeGeneratedImage(url, !url.startsWith('data:'))
+  return { decoded, mimeType }
+}
+
 // Generic image generation. Picks the provider from the model id and resolves
 // the API key from .env.local (VITE_GEMINI_API_KEY / VITE_OPENAI_API_KEY).
 export async function generateImage({
@@ -246,11 +300,11 @@ export async function generateImage({
   const provider = providerForModel(model)
   const apiKey = resolveApiKey(provider)
   if (!apiKey) {
-    const envVar = provider === 'openai' ? 'VITE_OPENAI_API_KEY' : 'VITE_GEMINI_API_KEY'
+    const envVar = { openai: 'VITE_OPENAI_API_KEY', fal: 'VITE_FAL_API_KEY' }[provider] || 'VITE_GEMINI_API_KEY'
     throw new Error(`Missing ${envVar} in .env.local for the selected model.`)
   }
 
-  // Gemini gets a same-provider fallback model; OpenAI does not.
+  // Gemini gets a same-provider fallback model; OpenAI/fal do not.
   const attempts = provider === 'gemini' && model === DEFAULT_IMAGE_MODEL && FALLBACK_IMAGE_MODEL !== model
     ? [model, FALLBACK_IMAGE_MODEL]
     : [model]
@@ -258,8 +312,9 @@ export async function generateImage({
 
   for (const attemptModel of attempts) {
     try {
-      const { decoded, mimeType } = provider === 'openai'
-        ? await runOpenAIAttempt(apiKey, attemptModel, prompt, { quality })
+      const { decoded, mimeType } =
+        provider === 'openai' ? await runOpenAIAttempt(apiKey, attemptModel, prompt, { quality })
+        : provider === 'fal'  ? await runFalAttempt(apiKey, attemptModel, prompt, { outputFormat })
         : await runGeminiAttempt(apiKey, attemptModel, prompt, { quality, outputFormat })
       return {
         ...decoded,
