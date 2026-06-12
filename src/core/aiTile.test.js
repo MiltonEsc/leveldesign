@@ -47,6 +47,44 @@ test('providerForModel maps each model to its API provider', () => {
   assert.equal(aiTile.providerForModel('unknown-model'), 'gemini')
 })
 
+test('fal prompts are positive caption-style (no negations FLUX would invert)', () => {
+  const center = aiTile.buildTilePrompt({
+    subject: 'lava rock', role: 'center', tileSize: 32, provider: 'fal',
+    paletteHint: { primary: '#aa3311', secondary: '#882200', border: '#441100', highlight: '#ff7733', shadow: '#220800' },
+  })
+  assert.match(center, /Seamless repeating pixel art texture of lava rock/)
+  assert.match(center, /fills the entire square image from edge to edge/)
+  assert.match(center, /Color mood:/)
+  // FLUX inverts negations — the fal prompt must not contain instruction-style
+  // "No ..." / "Avoid ..." phrasing (which the Gemini/OpenAI prompt keeps).
+  assert.doesNotMatch(center, /\bAvoid\b|\bNo objects\b/)
+
+  const edge = aiTile.buildTilePrompt({
+    subject: 'powder snow', role: 'edge', provider: 'fal', contextPrompt: 'dark cave rock',
+  })
+  assert.match(edge, /powder snow, used as a terrain border material/)
+  assert.match(edge, /matches dark cave rock/)
+
+  // Other providers keep the instruction-style prompt untouched.
+  const gemini = aiTile.buildTilePrompt({ subject: 'lava rock', role: 'center', provider: 'gemini' })
+  assert.match(gemini, /Avoid drawing an outer border/)
+})
+
+test('cropCenterRgba keeps the central region', () => {
+  // 4×4 image whose central 2×2 pixels are marked 255.
+  const w = 4, h = 4
+  const data = new Uint8ClampedArray(w * h * 4)
+  for (const [x, y] of [[1, 1], [2, 1], [1, 2], [2, 2]]) data[(y * w + x) * 4] = 255
+  const { data: out, width, height } = aiTile.cropCenterRgba(data, w, h, 0.5)
+  assert.equal(width, 2)
+  assert.equal(height, 2)
+  for (let i = 0; i < out.length; i += 4) assert.equal(out[i], 255)
+  // frac >= 1 → untouched passthrough (same reference, same dims)
+  const same = aiTile.cropCenterRgba(data, w, h, 1)
+  assert.equal(same.data, data)
+  assert.equal(same.width, w)
+})
+
 test('buildFalRequestBody requests inline sync_mode square images', () => {
   const png = aiTile.buildFalRequestBody('fal-ai/flux/schnell', 'lava rock', { outputFormat: 'png' })
   assert.equal(png.prompt, 'lava rock')
