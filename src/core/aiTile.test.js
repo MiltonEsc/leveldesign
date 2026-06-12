@@ -47,17 +47,20 @@ test('providerForModel maps each model to its API provider', () => {
   assert.equal(aiTile.providerForModel('unknown-model'), 'gemini')
 })
 
-test('fal prompts are positive caption-style (no negations FLUX would invert)', () => {
+test('fal prompts are positive caption-style (no negations, no "pixel art" sprite bait)', () => {
   const center = aiTile.buildTilePrompt({
     subject: 'lava rock', role: 'center', tileSize: 32, provider: 'fal',
     paletteHint: { primary: '#aa3311', secondary: '#882200', border: '#441100', highlight: '#ff7733', shadow: '#220800' },
   })
-  assert.match(center, /Seamless repeating pixel art texture of lava rock/)
-  assert.match(center, /fills the entire square image from edge to edge/)
+  assert.match(center, /Seamless tileable texture of lava rock/)
+  assert.match(center, /every region of the image looks like every other region/)
   assert.match(center, /Color mood:/)
   // FLUX inverts negations — the fal prompt must not contain instruction-style
   // "No ..." / "Avoid ..." phrasing (which the Gemini/OpenAI prompt keeps).
   assert.doesNotMatch(center, /\bAvoid\b|\bNo objects\b/)
+  // "pixel art" pushes FLUX toward centered SPRITES; the app's downscale +
+  // quantize pipeline pixelizes the result instead, so the words must not appear.
+  assert.doesNotMatch(center, /pixel art/i)
 
   const edge = aiTile.buildTilePrompt({
     subject: 'powder snow', role: 'edge', provider: 'fal', contextPrompt: 'dark cave rock',
@@ -68,6 +71,33 @@ test('fal prompts are positive caption-style (no negations FLUX would invert)', 
   // Other providers keep the instruction-style prompt untouched.
   const gemini = aiTile.buildTilePrompt({ subject: 'lava rock', role: 'center', provider: 'gemini' })
   assert.match(gemini, /Avoid drawing an outer border/)
+  assert.match(gemini, /Pixel art video-game terrain material/)
+})
+
+test('vignetteScore tells uniform textures from centered blobs; crop adapts', () => {
+  const size = 128
+  const uniform = new Uint8ClampedArray(size * size * 4)
+  for (let i = 0; i < uniform.length; i += 4) {
+    uniform[i] = 120; uniform[i + 1] = 90; uniform[i + 2] = 60; uniform[i + 3] = 255
+  }
+  assert.ok(aiTile.vignetteScore(uniform, size, size) < 5)
+
+  // Bright centered blob on a dark background (the FLUX failure mode).
+  const blob = new Uint8ClampedArray(size * size * 4)
+  const c = size / 2, r = size * 0.3
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = (y * size + x) * 4
+      const inside = (x - c) ** 2 + (y - c) ** 2 < r * r
+      blob[i] = inside ? 220 : 20
+      blob[i + 1] = inside ? 200 : 25
+      blob[i + 2] = inside ? 90 : 35
+      blob[i + 3] = 255
+    }
+  }
+  assert.ok(aiTile.vignetteScore(blob, size, size) > 48)
+  // Blob → tighter crop than a uniform texture.
+  assert.ok(aiTile.pickFalCropFraction(blob, size, size) < aiTile.pickFalCropFraction(uniform, size, size))
 })
 
 test('cropCenterRgba keeps the central region', () => {
