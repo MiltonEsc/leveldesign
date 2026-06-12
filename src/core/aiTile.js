@@ -56,6 +56,7 @@ export function buildTilePrompt({
   tileSize = 16,
   paletteHint = null,
   contextPrompt = '',
+  provider = 'gemini',
 }) {
   const cleanedSubject = (subject || '').trim()
   const palette = paletteHint
@@ -67,6 +68,28 @@ export function buildTilePrompt({
         paletteHint.shadow,
       ].filter(Boolean).join(', ')
     : ''
+
+  // FLUX (fal) ignores instruction-style prompts, and negations backfire: with
+  // T5/CLIP conditioning, mentioning "border" — even as "avoid drawing a
+  // border" — INCREASES the chance of a drawn border/vignette, which is exactly
+  // what breaks autotiling (every tile looks like an isolated blob). So for fal
+  // the prompt is a positive, caption-style description of a uniform repeating
+  // surface with no centered subject.
+  if (provider === 'fal') {
+    const material = role === 'edge'
+      ? `${cleanedSubject}, used as a terrain border material${contextPrompt ? ` that visually matches ${contextPrompt.trim()}` : ''}`
+      : cleanedSubject
+    return [
+      `Seamless repeating pixel art texture of ${material}.`,
+      'Flat top-down view of a video-game terrain surface.',
+      'One single uniform pattern that fills the entire square image from edge to edge,',
+      'as if cropped from the middle of a much larger continuous surface.',
+      'The pattern continues identically past every edge of the image.',
+      'Flat even lighting across the whole image, limited color palette,',
+      `large readable pixel clusters that stay clear at ${tileSize}px.`,
+      palette ? `Color mood: ${palette}.` : '',
+    ].filter(Boolean).join(' ')
+  }
 
   const shared = [
     'Pixel art video-game terrain material.',
@@ -530,6 +553,27 @@ export function postprocessTilePixels(rawPixels, rawWidth, rawHeight, tileSize, 
   }
 }
 
+// Keep the central fraction of an RGBA image (returns { data, width, height }).
+// Exported for tests.
+export function cropCenterRgba(data, width, height, frac) {
+  if (!frac || frac >= 1) return { data, width, height }
+  const cw = Math.max(1, Math.round(width * frac))
+  const ch = Math.max(1, Math.round(height * frac))
+  const x0 = (width - cw) >> 1
+  const y0 = (height - ch) >> 1
+  const out = new Uint8ClampedArray(cw * ch * 4)
+  for (let y = 0; y < ch; y++) {
+    const src = ((y0 + y) * width + x0) * 4
+    out.set(data.subarray(src, src + cw * 4), y * cw * 4)
+  }
+  return { data: out, width: cw, height: ch }
+}
+
+// FLUX biases hard toward centered compositions with vignettes/frames even
+// when prompted for a uniform texture; keeping only the central region cuts
+// that off before the downscale (the result is still ≥38× the largest tile).
+const FAL_CENTER_CROP = 0.6
+
 export async function generateBaseTileWithAI({
   prompt,
   model = DEFAULT_IMAGE_MODEL,
@@ -543,9 +587,15 @@ export async function generateBaseTileWithAI({
 }) {
   if (!prompt || !prompt.trim()) throw new Error('Enter a prompt describing the tile.')
 
-  const finalPrompt = buildTilePrompt({ subject: prompt, role, tileSize, paletteHint, contextPrompt })
+  const provider = providerForModel(model)
+  const finalPrompt = buildTilePrompt({ subject: prompt, role, tileSize, paletteHint, contextPrompt, provider })
   const decoded = await generateImage({ prompt: finalPrompt, model, quality, outputFormat })
-  const processed = postprocessTilePixels(decoded.data, decoded.width, decoded.height, tileSize, { dither })
+  // Props keep the full frame (a centered subject is the point there); this
+  // crop only runs on the tile path, for fal images.
+  const source = decoded.meta.provider === 'fal'
+    ? cropCenterRgba(decoded.data, decoded.width, decoded.height, FAL_CENTER_CROP)
+    : decoded
+  const processed = postprocessTilePixels(source.data, source.width, source.height, tileSize, { dither })
 
   return {
     pixels: processed.pixels,
