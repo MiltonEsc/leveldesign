@@ -4,6 +4,7 @@ import { Application, Container, Rectangle, Sprite, Texture } from 'pixi.js'
 import { computeIndexMap, patchIndexMap, patchIndexMapFromCells } from '../../core/autotile.js'
 import { composeNativeSheet } from '../../core/composeSheet.js'
 import { FILL_INDEX, makeFillVariants, pickVariant } from '../../core/tileVariants.js'
+import { ANIM_FRAME_MS } from '../../core/tilesetDefinition.js'
 import { MIN_CELL_PX, MAX_CELL_PX, ZOOM_STEP } from './zoomConfig.js'
 
 const NO_TRANSFORM = { flipX: false, flipY: false, rotation: 0 }
@@ -39,6 +40,7 @@ export function LevelCanvas({
   levelTool = 'terrain', placedProps = [], assetsById = {}, selectedAssetId = null,
   propTransform = NO_TRANSFORM, tileVariation = false,
   onPlaceProp, onRemovePropAt,
+  selectedProp = null, onSelectPropAt, onMoveProp,
 }) {
   const wrapperRef = useRef(null)
   const pixiHostRef = useRef(null)
@@ -48,6 +50,7 @@ export function LevelCanvas({
   const zoomAnchor = useRef(null)
   const rectDrag = useRef(null)
   const lastPaintCell = useRef(null)
+  const propDrag = useRef(null) // { id, dx, dy, lastX, lastY, histPushed } for the Select tool
 
   const appRef = useRef(null)
   const appReadyRef = useRef(false)
@@ -61,7 +64,9 @@ export function LevelCanvas({
 
   const displayW = width * cellPx
   const displayH = height * cellPx
-  const cursor = levelTool === 'props' ? (selectedAssetId != null ? 'copy' : 'not-allowed') : 'crosshair'
+  const cursor = levelTool === 'props'
+    ? (selectedAssetId != null ? 'copy' : 'not-allowed')
+    : levelTool === 'select' ? 'default' : 'crosshair'
 
   const forEachCellOnLine = useCallback((fromX, fromY, toX, toY, visit) => {
     let x = fromX
@@ -129,6 +134,16 @@ export function LevelCanvas({
       frame: new Rectangle((idx % 8) * sourceTileSize, Math.floor(idx / 8) * sourceTileSize, sourceTileSize, sourceTileSize),
     }))
 
+    // Animation frames (procedural tilesets): one extra 48-texture set per frame.
+    const frameTextures = (layerTile.frames || []).map(frameTiles => {
+      const frameNative = composeNativeSheet(frameTiles, sourceTileSize)
+      const frameSource = Texture.from(frameNative, true).source
+      return Array.from({ length: 48 }, (_, idx) => new Texture({
+        source: frameSource,
+        frame: new Rectangle((idx % 8) * sourceTileSize, Math.floor(idx / 8) * sourceTileSize, sourceTileSize, sourceTileSize),
+      }))
+    })
+
     // Standalone textures for the fill-tile variants (anti-repetition). Always
     // built (cheap, cached); whether they're used is the `tileVariation` toggle.
     const fillVariantTextures = makeFillVariants(layerTile.tiles[FILL_INDEX], sourceTileSize).map(v => {
@@ -139,7 +154,7 @@ export function LevelCanvas({
       return Texture.from(c, true)
     })
 
-    const entry = { tileSize: sourceTileSize, textures, sheetTexture, fillVariantTextures }
+    const entry = { tileSize: sourceTileSize, textures, sheetTexture, fillVariantTextures, frameTextures }
     terrainTextureCache.current.set(layerTile, entry)
     return entry
   }, [tileSize])
@@ -172,6 +187,9 @@ export function LevelCanvas({
 
       const terrain = new Container()
       const props = new Container()
+      // Draw order of placed props follows their array order via zIndex (the
+      // reconciler reuses sprites, so insertion order alone can't express it).
+      props.sortableChildren = true
       app.stage.addChild(terrain)
       app.stage.addChild(props)
 
@@ -260,6 +278,7 @@ export function LevelCanvas({
         state.indexMap = null
         state.grid = null
         state.manualTiles = null
+        state.cellIdx = new Int16Array(expected).fill(-1) // sheet index per cell (-1 = empty), for the animation ticker
         state.width = width
         state.height = height
       } else {
@@ -324,6 +343,7 @@ export function LevelCanvas({
           ? manualIdx
           : (manualIdx >= 0 ? manualIdx : (indexMap[cell] ?? 0))
         const isEmpty = layer.kind === 'manual' ? idx < 0 : !idx
+        state.cellIdx[cell] = isEmpty ? -1 : idx
         if (isEmpty) {
           sprite.visible = false
           sprite.texture = Texture.EMPTY
@@ -345,8 +365,41 @@ export function LevelCanvas({
       state.manualTiles = layer.manualTiles
       state.tileRef = layerTile
       state.border = border
+      state.texEntry = textureEntry
     })
   }, [pixiReady, layers, layerTiles, width, height, tileSize, seamlessEdges, getTerrainTextures, tileVariation])
+
+  // Animation ticker: when any layer's tileset has frames, cycle every sprite's
+  // texture through [base, ...frames] using the per-cell sheet index recorded
+  // by the terrain effect. The base slot restores fill-tile variants.
+  useEffect(() => {
+    if (!pixiReady) return
+    if (!layerTiles.some(lt => lt?.frames?.length)) return
+    let tick = 0
+    const id = setInterval(() => {
+      tick++
+      for (const state of layerStateCacheRef.current.values()) {
+        const entry = state.texEntry
+        const frames = entry?.frameTextures
+        if (!frames?.length || !state.cellIdx) continue
+        const slot = tick % (frames.length + 1)
+        const set = slot === 0 ? entry.textures : frames[slot - 1]
+        const variants = entry.fillVariantTextures || []
+        for (let cell = 0; cell < state.cellIdx.length; cell++) {
+          const idx = state.cellIdx[cell]
+          if (idx < 0) continue
+          const sprite = state.sprites[cell]
+          if (!sprite) continue
+          if (slot === 0 && state.variation && idx === FILL_INDEX && variants.length) {
+            const pick = pickVariant(cell % state.width, (cell / state.width) | 0, 1 + variants.length)
+            if (pick > 0) { sprite.texture = variants[pick - 1]; continue }
+          }
+          sprite.texture = set[idx] || Texture.EMPTY
+        }
+      }
+    }, ANIM_FRAME_MS)
+    return () => clearInterval(id)
+  }, [pixiReady, layerTiles])
 
   useEffect(() => {
     if (!pixiReady || !propsContainerRef.current) return
@@ -357,9 +410,9 @@ export function LevelCanvas({
 
     // Reconcile sprites against placedProps by id instead of rebuilding the
     // whole layer, so placing/removing one prop touches only that sprite.
-    for (const placed of placedProps) {
+    placedProps.forEach((placed, order) => {
       const entry = assetTextures[placed.assetId]
-      if (!entry) continue
+      if (!entry) return
       seen.add(placed.id)
 
       let sprite = cache.get(placed.id)
@@ -371,8 +424,9 @@ export function LevelCanvas({
       } else if (sprite.texture !== entry.texture) {
         sprite.texture = entry.texture
       }
+      sprite.zIndex = order
       applyPropTransform(sprite, placed, entry, tileSize)
-    }
+    })
 
     for (const [id, sprite] of cache) {
       if (seen.has(id)) continue
@@ -425,6 +479,23 @@ export function LevelCanvas({
       }
     }
 
+    if (levelTool === 'select' && selectedProp) {
+      const a = assetsById[selectedProp.assetId]
+      if (a) {
+        // Same visual footprint as the hit-test: rotation swaps the extents.
+        const swap = ((selectedProp.rotation || 0) % 180) !== 0
+        const w = (swap ? a.rows : a.cols) * cellPx
+        const h = (swap ? a.cols : a.rows) * cellPx
+        const cx = (selectedProp.x + a.cols / 2) * cellPx
+        const cy = (selectedProp.y + a.rows / 2) * cellPx
+        ctx.strokeStyle = 'rgba(47,214,166,0.95)'
+        ctx.lineWidth = 2
+        ctx.setLineDash([6, 4])
+        ctx.strokeRect(cx - w / 2 + 1, cy - h / 2 + 1, w - 2, h - 2)
+        ctx.setLineDash([])
+      }
+    }
+
     if (levelTool === 'terrain' && terrainTool === 'rect' && rectDrag.current?.cur) {
       const { start, cur } = rectDrag.current
       const x0 = Math.min(start[0], cur[0])
@@ -435,7 +506,7 @@ export function LevelCanvas({
       ctx.lineWidth = 2
       ctx.strokeRect(x0 * cellPx + 1, y0 * cellPx + 1, (x1 - x0 + 1) * cellPx - 2, (y1 - y0 + 1) * cellPx - 2)
     }
-  }, [width, height, cellPx, showGrid, levelTool, selectedAssetId, assetTextures, terrainTool, propTransform])
+  }, [width, height, cellPx, showGrid, levelTool, selectedAssetId, assetTextures, terrainTool, propTransform, selectedProp, assetsById])
 
   useEffect(() => { drawOverlay() }, [drawOverlay])
 
@@ -502,6 +573,13 @@ export function LevelCanvas({
   const handleDown = useCallback((e) => {
     e.preventDefault()
     const [x, y] = cellFromEvent(e)
+    if (levelTool === 'select') {
+      const hit = onSelectPropAt?.(x, y)
+      propDrag.current = hit
+        ? { id: hit.id, dx: x - hit.x, dy: y - hit.y, lastX: hit.x, lastY: hit.y, histPushed: false }
+        : null
+      return
+    }
     if (levelTool === 'props') {
       if (e.button === 2) onRemovePropAt?.(x, y)
       else onPlaceProp?.(x, y)
@@ -517,10 +595,24 @@ export function LevelCanvas({
     painting.current = true
     lastPaintCell.current = [x, y]
     onStartPaint(x, y, e.button === 2, terrainBrushSize)
-  }, [cellFromEvent, drawOverlay, levelTool, onFillTerrain, onPickTerrain, onPlaceProp, onRemovePropAt, onStartPaint, terrainBrushSize, terrainTool])
+  }, [cellFromEvent, drawOverlay, levelTool, onFillTerrain, onPickTerrain, onPlaceProp, onRemovePropAt, onSelectPropAt, onStartPaint, terrainBrushSize, terrainTool])
 
   const handleMove = useCallback((e) => {
     const [x, y] = cellFromEvent(e)
+    if (levelTool === 'select') {
+      const d = propDrag.current
+      if (!d) return
+      const nx = x - d.dx
+      const ny = y - d.dy
+      if (nx === d.lastX && ny === d.lastY) return
+      // First real move records history once; the rest of the drag doesn't,
+      // so the whole drag undoes in one step.
+      onMoveProp?.(d.id, nx, ny, !d.histPushed)
+      d.histPushed = true
+      d.lastX = nx
+      d.lastY = ny
+      return
+    }
     if (levelTool === 'props') {
       hoverCell.current = [x, y]
       drawOverlay()
@@ -541,7 +633,7 @@ export function LevelCanvas({
     if (prev[0] === x && prev[1] === y) return
     forEachCellOnLine(prev[0], prev[1], x, y, (px, py) => onContinuePaint(px, py, terrainBrushSize))
     lastPaintCell.current = [x, y]
-  }, [cellFromEvent, drawOverlay, forEachCellOnLine, levelTool, onContinuePaint, terrainBrushSize, terrainTool])
+  }, [cellFromEvent, drawOverlay, forEachCellOnLine, levelTool, onContinuePaint, onMoveProp, terrainBrushSize, terrainTool])
 
   const handleUp = useCallback(() => {
     if (rectDrag.current) {
@@ -552,6 +644,7 @@ export function LevelCanvas({
     }
     painting.current = false
     lastPaintCell.current = null
+    propDrag.current = null
     onEndPaint?.()
   }, [drawOverlay, onEndPaint, onRectTerrain])
 
@@ -559,6 +652,7 @@ export function LevelCanvas({
     painting.current = false
     rectDrag.current = null
     lastPaintCell.current = null
+    propDrag.current = null
     onEndPaint?.()
     if (hoverCell.current) {
       hoverCell.current = null

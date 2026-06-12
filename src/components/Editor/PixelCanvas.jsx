@@ -1,9 +1,11 @@
 import { useRef, useEffect, useCallback } from 'react'
+import { forEachCellOnLine } from '../../core/canvasUtils.js'
 
 export function PixelCanvas({ pixels, tileSize, zoom, onStartStroke, onContinueStroke, onEndStroke, onZoomChange }) {
   const canvasRef  = useRef(null)
   const gridRef    = useRef(null)
   const wrapperRef = useRef(null)
+  const lastCell   = useRef(null) // last painted cell, for stroke interpolation
 
   // Render pixels to canvas whenever they change
   useEffect(() => {
@@ -49,16 +51,25 @@ export function PixelCanvas({ pixels, tileSize, zoom, onStartStroke, onContinueS
   const handleMouseDown = useCallback((e) => {
     e.preventDefault()
     const [x, y] = getPixelCoords(e)
+    lastCell.current = [x, y]
     onStartStroke(x, y)
   }, [getPixelCoords, onStartStroke])
 
   const handleMouseMove = useCallback((e) => {
     if (e.buttons !== 1) return
     const [x, y] = getPixelCoords(e)
-    onContinueStroke(x, y)
+    const prev = lastCell.current
+    // Interpolate between move events so fast strokes don't leave gaps.
+    if (prev && (prev[0] !== x || prev[1] !== y)) {
+      forEachCellOnLine(prev[0], prev[1], x, y, (px, py) => onContinueStroke(px, py))
+    } else {
+      onContinueStroke(x, y)
+    }
+    lastCell.current = [x, y]
   }, [getPixelCoords, onContinueStroke])
 
   const handleMouseUp = useCallback(() => {
+    lastCell.current = null
     onEndStroke()
   }, [onEndStroke])
 

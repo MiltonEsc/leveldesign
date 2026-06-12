@@ -35,6 +35,11 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (p) => p.replace(/^\/openai/, ''),
       },
+      '/fal': {
+        target: 'https://fal.run',
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/fal/, ''),
+      },
     },
   },
 })

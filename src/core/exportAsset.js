@@ -7,7 +7,9 @@ function triggerDownload(canvas, filename) {
     a.href = url
     a.download = filename
     a.click()
-    URL.revokeObjectURL(url)
+    // Revoking synchronously can abort the download in some browsers; give the
+    // fetch a moment (same pattern as exportLevel.js).
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
   }, 'image/png')
 }
 

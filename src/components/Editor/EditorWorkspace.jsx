@@ -7,6 +7,7 @@ import { PixelCanvas } from './PixelCanvas.jsx'
 import { TilePreviewMosaic } from './TilePreviewMosaic.jsx'
 import { composeNativeSheet } from '../../core/composeSheet.js'
 import { exportTilesheet } from '../../core/exportSheet.js'
+import { ANIM_FRAME_MS } from '../../core/tilesetDefinition.js'
 
 // AI panels pull in the Gemini/OpenAI request code; load them only when the
 // (collapsed-by-default) "AI textures" section is opened.
@@ -32,26 +33,48 @@ const fitTileZoom  = (size) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.floor(
 const fitSheetZoom = (size) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM,
   Math.floor(Math.min(540 / (8 * size), 430 / (6 * size)))))
 
-function SheetCanvas({ tiles, tileSize, scale, className, onZoomChange }) {
+function SheetCanvas({ tiles, tileSize, scale, className, onZoomChange, onSelectTile, markedTiles, frames }) {
   const ref = useRef(null)
-  const nativeRef = useRef(null)
+  const nativesRef = useRef([])
+  const [frameIdx, setFrameIdx] = useState(0)
 
-  // Compose the native 8×6 sheet only when tiles/tileSize change (the expensive
-  // part). Zoom just rescales the cached sheet, so wheel-zoom stays smooth.
+  // Compose the native 8×6 sheet(s) only when tiles/frames/tileSize change (the
+  // expensive part). Zoom just rescales the cached sheets, so wheel-zoom stays
+  // smooth; animation just cycles which cached sheet is drawn.
   useEffect(() => {
-    nativeRef.current = tiles ? composeNativeSheet(tiles, tileSize) : null
-  }, [tiles, tileSize])
+    nativesRef.current = tiles
+      ? [tiles, ...(frames || [])].map(t => composeNativeSheet(t, tileSize))
+      : []
+    setFrameIdx(0)
+  }, [tiles, frames, tileSize])
+
+  // Cycle animation frames while the sheet has them.
+  useEffect(() => {
+    if (!frames?.length) return
+    const id = setInterval(() => setFrameIdx(i => i + 1), ANIM_FRAME_MS)
+    return () => clearInterval(id)
+  }, [frames])
 
   useEffect(() => {
     const cv = ref.current
-    const native = nativeRef.current
+    const natives = nativesRef.current
+    const native = natives.length ? natives[frameIdx % natives.length] : null
     if (!cv || !native) return
     cv.width = native.width * scale
     cv.height = native.height * scale
     const ctx = cv.getContext('2d')
     ctx.imageSmoothingEnabled = false
     ctx.drawImage(native, 0, 0, native.width, native.height, 0, 0, cv.width, cv.height)
-  }, [tiles, tileSize, scale])
+    // Corner markers on hand-edited (overridden) tiles.
+    if (markedTiles?.length) {
+      ctx.fillStyle = '#2fd6a6'
+      const cellW = cv.width / 8
+      const cellH = cv.height / 6
+      for (const idx of markedTiles) {
+        ctx.fillRect((idx % 8) * cellW + 1, Math.floor(idx / 8) * cellH + 1, 5, 5)
+      }
+    }
+  }, [tiles, tileSize, scale, markedTiles, frames, frameIdx])
 
   // Non-passive wheel zoom (only when interactive — the preview sheet omits it).
   const handleWheel = useCallback((e) => {
@@ -67,18 +90,46 @@ function SheetCanvas({ tiles, tileSize, scale, className, onZoomChange }) {
     return () => el.removeEventListener('wheel', handleWheel)
   }, [handleWheel, onZoomChange])
 
-  return <canvas ref={ref} className={className} />
+  // Click → sheet index (8×6 grid), for the per-tile override editor.
+  const handleClick = useCallback((e) => {
+    if (!onSelectTile) return
+    const rect = ref.current.getBoundingClientRect()
+    const col = Math.floor(((e.clientX - rect.left) / rect.width) * 8)
+    const row = Math.floor(((e.clientY - rect.top) / rect.height) * 6)
+    if (col >= 0 && col < 8 && row >= 0 && row < 6) onSelectTile(row * 8 + col)
+  }, [onSelectTile])
+
+  return (
+    <canvas
+      ref={ref}
+      className={className}
+      onClick={handleClick}
+      style={onSelectTile ? { cursor: 'pointer' } : undefined}
+      title={onSelectTile ? 'Click a tile to edit it' : undefined}
+    />
+  )
 }
+
+const OVERRIDE_TOOLS = [
+  ['pencil', 'Pencil'],
+  ['eraser', 'Eraser'],
+  ['fill', 'Fill'],
+  ['eyedropper', 'Pick'],
+]
 
 export function EditorWorkspace({
   mode, setMode, tileSize, biome, onColorChange, onResetColors, onShuffleColors,
   drawing, tiles, onGenerate, onAITile, onAIProcedural, biomeId, savedCount,
   editorKind, setEditorKind,
+  editingTile = null, overrideDraw, overriddenTiles = [],
+  onEditTile, onApplyTileEdit, onCancelTileEdit, onResetTileOverride,
+  animFrameCount = 1, setAnimFrameCount, canAnimate = false, animFrames = null,
 }) {
   const [zoom, setZoom] = useState(() => fitSheetZoom(tileSize))
   const [exportScale, setExportScale] = useState(1)
   const cols = 8
   const rows = 6
+  const isEditingTile = editingTile != null && overrideDraw
 
   // Keep the procedural sheet fitted when the tile size changes.
   useEffect(() => { setZoom(fitSheetZoom(tileSize)) }, [tileSize])
@@ -87,10 +138,12 @@ export function EditorWorkspace({
     drawing.setZoom((z) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z + delta)))
   const changeSheetZoom = (delta) =>
     setZoom((z) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z + delta)))
+  const changeOverrideZoom = (delta) =>
+    overrideDraw?.setZoom((z) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z + delta)))
 
   const handleExport = () => {
     if (!tiles) return
-    exportTilesheet(tiles, tileSize, `tileset_${biomeId || 'custom'}_${tileSize}px.png`, exportScale)
+    exportTilesheet(tiles, tileSize, `tileset_${biomeId || 'custom'}_${tileSize}px.png`, exportScale, animFrames)
   }
 
   return (
@@ -147,6 +200,23 @@ export function EditorWorkspace({
             </Section>
           )}
 
+          {mode === 'procedural' && canAnimate && (
+            <Section title="Animation" icon="spark" defaultOpen={animFrameCount > 1}>
+              <label className="field-label">Frames</label>
+              <Segmented
+                full
+                size="sm"
+                value={animFrameCount}
+                onChange={setAnimFrameCount}
+                options={[{ value: 1, label: 'Off' }, { value: 2, label: '2' }, { value: 3, label: '3' }, { value: 4, label: '4' }]}
+              />
+              <p className="hint">
+                Seeded shimmer variants of the sheet. They cycle live in the previews and the
+                Levels view, stack as extra rows in the PNG export, and become Tiled tile animations.
+              </p>
+            </Section>
+          )}
+
           <Section title="AI textures" icon="spark" defaultOpen={false}>
             <Suspense fallback={<div className="ai-hint">Loading AI…</div>}>
               {mode === 'draw'
@@ -167,9 +237,18 @@ export function EditorWorkspace({
           />
           <div className="biome-pill"><span className="dot" style={{ background: biome.colors.primary }} /> {biome.label}</div>
           <div className="spacer" />
-          <span className="tool-meta">{cols} × {rows} · {tileSize}px</span>
+          <span className="tool-meta">
+            {isEditingTile ? `Editing tile #${editingTile}` : `${cols} × ${rows} · ${tileSize}px`}
+          </span>
           <div className="zoom-ctrl">
-            {mode === 'draw' ? (
+            {isEditingTile ? (
+              <>
+                <button onClick={() => changeOverrideZoom(-1)} disabled={overrideDraw.zoom <= MIN_ZOOM} title="Zoom out">−</button>
+                <span>{overrideDraw.zoom}×</span>
+                <button onClick={() => changeOverrideZoom(1)} disabled={overrideDraw.zoom >= MAX_ZOOM} title="Zoom in">+</button>
+                <button onClick={() => overrideDraw.setZoom(fitTileZoom(tileSize))} title="Fit to stage" style={{ fontSize: 10, padding: '0 6px' }}>Fit</button>
+              </>
+            ) : mode === 'draw' ? (
               <>
                 <button onClick={() => changeZoom(-1)} disabled={drawing.zoom <= MIN_ZOOM} title="Zoom out">−</button>
                 <span>{drawing.zoom}×</span>
@@ -188,7 +267,41 @@ export function EditorWorkspace({
         </div>
 
         <div className="stage-canvas">
-          {mode === 'draw' ? (
+          {isEditingTile ? (
+            <div style={{ display: 'flex', gap: 18, alignItems: 'flex-start', flexWrap: 'wrap', justifyContent: 'center' }}>
+              <div className="canvas-frame">
+                <PixelCanvas
+                  pixels={overrideDraw.pixels}
+                  tileSize={tileSize}
+                  zoom={overrideDraw.zoom}
+                  onStartStroke={overrideDraw.startStroke}
+                  onContinueStroke={overrideDraw.continueStroke}
+                  onEndStroke={overrideDraw.endStroke}
+                  onZoomChange={changeOverrideZoom}
+                />
+              </div>
+              <div style={{ width: 170, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div className="gen-mini-row">
+                  {OVERRIDE_TOOLS.map(([id, label]) => (
+                    <button key={id} className={`gen-mini-btn ${overrideDraw.tool === id ? 'on' : ''}`}
+                      onClick={() => overrideDraw.setTool(id)} title={label}>{label}</button>
+                  ))}
+                </div>
+                <ColorRow label="Color" value={overrideDraw.activeColor} onChange={overrideDraw.setActiveColor} />
+                <div className="swatch-grid">
+                  {QUICK_SWATCHES.map((c) => (
+                    <button key={c} className={`swatch ${overrideDraw.activeColor === c ? 'active' : ''}`}
+                      style={{ background: c }} title={c} onClick={() => overrideDraw.setActiveColor(c)} />
+                  ))}
+                </div>
+                <div className="row-btns">
+                  <Btn size="sm" variant="outline" icon="undo" full onClick={overrideDraw.undo} disabled={!overrideDraw.canUndo}>Undo</Btn>
+                  <Btn size="sm" variant="outline" icon="redo" full onClick={overrideDraw.redo} disabled={!overrideDraw.canRedo}>Redo</Btn>
+                </div>
+                <p className="hint">Editing one sheet tile. Apply bakes it as an override on the generated tileset.</p>
+              </div>
+            </div>
+          ) : mode === 'draw' ? (
             <div style={{ display: 'flex', gap: 18, alignItems: 'flex-start', flexWrap: 'wrap', justifyContent: 'center' }}>
               <div className="canvas-frame">
                 <PixelCanvas
@@ -205,17 +318,32 @@ export function EditorWorkspace({
             </div>
           ) : (
             <div className="canvas-frame">
-              <SheetCanvas tiles={tiles} tileSize={tileSize} scale={zoom} className="main-canvas" onZoomChange={changeSheetZoom} />
+              <SheetCanvas tiles={tiles} tileSize={tileSize} scale={zoom} className="main-canvas"
+                onZoomChange={changeSheetZoom} onSelectTile={onEditTile} markedTiles={overriddenTiles}
+                frames={animFrames} />
             </div>
           )}
         </div>
 
         <div className="stage-actions">
-          <Btn variant="outline" icon="reset" onClick={onResetColors}>Reset</Btn>
-          <Btn variant="accentSoft" icon="dice" onClick={onShuffleColors}>Shuffle palette</Btn>
-          <Btn variant="primary" size="lg" icon="grid" onClick={onGenerate}>
-            {mode === 'draw' ? 'Generate from drawing' : 'Generate procedural'}
-          </Btn>
+          {isEditingTile ? (
+            <>
+              <Btn variant="outline" icon="reset" onClick={onCancelTileEdit}>Cancel</Btn>
+              <Btn variant="danger" icon="trash" onClick={onResetTileOverride}
+                disabled={!overriddenTiles.includes(editingTile)}>
+                Remove override
+              </Btn>
+              <Btn variant="primary" size="lg" icon="save" onClick={onApplyTileEdit}>Apply tile</Btn>
+            </>
+          ) : (
+            <>
+              <Btn variant="outline" icon="reset" onClick={onResetColors}>Reset</Btn>
+              <Btn variant="accentSoft" icon="dice" onClick={onShuffleColors}>Shuffle palette</Btn>
+              <Btn variant="primary" size="lg" icon="grid" onClick={onGenerate}>
+                {mode === 'draw' ? 'Generate from drawing' : 'Generate procedural'}
+              </Btn>
+            </>
+          )}
         </div>
       </main>
 
@@ -223,8 +351,10 @@ export function EditorWorkspace({
         <div className="panel-scroll">
           <Section title={`Preview · ${cols} × ${rows}`} icon="image">
             <div className="preview-wrap">
-              <SheetCanvas tiles={tiles} tileSize={tileSize} scale={3} className="preview-canvas" />
+              <SheetCanvas tiles={tiles} tileSize={tileSize} scale={3} className="preview-canvas"
+                onSelectTile={onEditTile} markedTiles={overriddenTiles} frames={animFrames} />
             </div>
+            <p className="hint">Click a tile to edit it individually.</p>
             <div className="mini-stats">
               <div className="mini-stat"><b>{tileSize}px</b><span>Tile size</span></div>
               <div className="mini-stat"><b>{cols * rows}</b><span>Tiles</span></div>

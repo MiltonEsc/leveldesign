@@ -42,7 +42,25 @@ test('buildImageRequestBody uses Gemini image generation defaults', () => {
 test('providerForModel maps each model to its API provider', () => {
   assert.equal(aiTile.providerForModel('gemini-2.5-flash-image'), 'gemini')
   assert.equal(aiTile.providerForModel('gpt-image-1'), 'openai')
+  assert.equal(aiTile.providerForModel('fal-ai/flux/schnell'), 'fal')
+  assert.equal(aiTile.providerForModel('fal-ai/flux/dev'), 'fal')
   assert.equal(aiTile.providerForModel('unknown-model'), 'gemini')
+})
+
+test('buildFalRequestBody requests inline sync_mode square images', () => {
+  const png = aiTile.buildFalRequestBody('fal-ai/flux/schnell', 'lava rock', { outputFormat: 'png' })
+  assert.equal(png.prompt, 'lava rock')
+  assert.equal(png.image_size, 'square_hd')
+  assert.equal(png.num_images, 1)
+  assert.equal(png.sync_mode, true)            // returns a data-URI, not a CDN url
+  assert.equal(png.output_format, 'png')
+  assert.equal(png.num_inference_steps, undefined) // schnell keeps its own default
+
+  // Any non-png outputFormat falls back to jpeg.
+  const jpg = aiTile.buildFalRequestBody('fal-ai/flux/dev', 'lava rock', { outputFormat: 'webp' })
+  assert.equal(jpg.output_format, 'jpeg')
+  // Default (no opts) is png per DEFAULT_OUTPUT_FORMAT.
+  assert.equal(aiTile.buildFalRequestBody('fal-ai/flux/schnell', 'x').output_format, 'png')
 })
 
 test('edge prompt includes role-specific border guidance', () => {
@@ -125,6 +143,51 @@ test('AI texture composition still creates 48 tiles for all supported grid sizes
       assert.equal(tile.height, size)
     }
   }
+})
+
+test('synthesized edge (no edge texture) derives from the center, not the palette', () => {
+  const size = 16
+  // Red "lava" center WITH a white artifact band in its bottom rows (AI images
+  // often carry bands/watermark remnants at their boundary); the active palette
+  // is deliberately green.
+  const center = new Uint8ClampedArray(size * size * 4)
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = (y * size + x) * 4
+      const artifact = y >= size - 2
+      center[i] = artifact ? 255 : 200
+      center[i + 1] = artifact ? 255 : 40
+      center[i + 2] = artifact ? 255 : 30
+      center[i + 3] = 255
+    }
+  }
+  const tiles = procedural.generateTilesFromTextures(
+    new ImageData(center, size, size),
+    null, // no edge texture → synthesized
+    size,
+    { border: '#223311', shadow: '#112211', highlight: '#99aa66' }, // green palette must NOT leak in
+  )
+  // Index 1 = the isolated tile (bitmask 0): every edge is painted. Corner
+  // pixels must be a darkened red — never the palette's green, and never the
+  // artifact's white copied from the center's boundary rows.
+  const px = tiles[1].data
+  const top = [px[0], px[1], px[2]]
+  const bi = ((size - 1) * size) * 4 // bottom-left corner
+  const bottom = [px[bi], px[bi + 1], px[bi + 2]]
+  for (const [r, g, b] of [top, bottom]) {
+    assert.ok(r > g, 'edge keeps the center hue (red > green)')
+    assert.ok(r > b, 'edge keeps the center hue (red > blue)')
+    assert.ok(r < 200, 'edge is darker than the center')
+    assert.ok(r > 0, 'edge is not black')
+    assert.ok(g < 150, 'edge does not copy the white artifact band')
+  }
+  // An explicit edge texture still wins over synthesis.
+  const blue = new Uint8ClampedArray(size * size * 4)
+  for (let i = 0; i < blue.length; i += 4) { blue[i + 2] = 220; blue[i + 3] = 255 }
+  const withEdge = procedural.generateTilesFromTextures(
+    new ImageData(center, size, size), new ImageData(blue, size, size), size, {},
+  )
+  assert.ok(withEdge[1].data[2] > withEdge[1].data[0], 'explicit edge texture is used as-is')
 })
 
 test('generateAllBiomeTiles memoizes by colors + params, not just identity', () => {

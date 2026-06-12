@@ -40,8 +40,11 @@ function paintEdge(data, s, side, ew, bo, sh, hi, seed) {
   }
 }
 
-// Draws a single tile procedurally for a given bitmask and biome
-function drawTile(mask, tileSize, colors, params) {
+// Draws a single tile procedurally for a given bitmask and biome.
+// `frameSeed` > 0 produces an animation frame: the textured edges re-scatter
+// with a shifted seed and a light interior shimmer is added, so cycling the
+// frames reads as living material (water glints, snow sparkle).
+function drawTile(mask, tileSize, colors, params, frameSeed = 0) {
   const data = new Uint8ClampedArray(tileSize * tileSize * 4)
   const s = tileSize
 
@@ -76,15 +79,28 @@ function drawTile(mask, tileSize, colors, params) {
     drawCrackedPattern(data, s, pr, pg, pb, sr, sg, sb)
   }
 
+  // Step 2.5: animation shimmer — scatter a few secondary/highlight pixels
+  // with a per-frame seed (frame 0 stays exactly the static tile).
+  if (frameSeed) {
+    for (let y = 0; y < s; y++) {
+      for (let x = 0; x < s; x++) {
+        const v = rnd(x, y, frameSeed * 7919)
+        if (v < 0.045) setPixelRGBA(data, x, y, s, sr, sg, sb, 255)
+        else if (v > 0.985) setPixelRGBA(data, x, y, s, hr, hg, hb, 255)
+      }
+    }
+  }
+
   // Border scales with tile size so it stays visible on large tiles (e.g. 64px)
   const ew = Math.max(params.edgeWidth, Math.round(tileSize / 6))
   const bo = [boR, boG, boB], sh = [shr, shg, shb], hi = [hr, hg, hb]
+  const edgeSeed = EDGE_SEED + frameSeed * 101
 
   // Step 3: Draw border strips (exposed cardinal edges) — textured, not flat
-  if (!t) paintEdge(data, s, 0, ew, bo, sh, hi, EDGE_SEED)
-  if (!b) paintEdge(data, s, 1, ew, bo, sh, hi, EDGE_SEED)
-  if (!l) paintEdge(data, s, 2, ew, bo, sh, hi, EDGE_SEED)
-  if (!r) paintEdge(data, s, 3, ew, bo, sh, hi, EDGE_SEED)
+  if (!t) paintEdge(data, s, 0, ew, bo, sh, hi, edgeSeed)
+  if (!b) paintEdge(data, s, 1, ew, bo, sh, hi, edgeSeed)
+  if (!l) paintEdge(data, s, 2, ew, bo, sh, hi, edgeSeed)
+  if (!r) paintEdge(data, s, 3, ew, bo, sh, hi, edgeSeed)
 
   // Step 4: Inner corner indicators (diagonal missing, both cardinals present)
   // Draw a 1×1 highlight pixel at the inner concave corner
@@ -216,10 +232,16 @@ function makeEmptyTileData(s) {
 }
 
 // Composes all 48 tiles from a CENTER texture + an EDGE source. `edgeData` is an
-// ImageData (e.g. an AI snow texture) or null → a textured edge is synthesized
-// from the biome's border/shadow/highlight palette. Always autotiles correctly
-// because tiles are composed (not cropped from an AI sheet).
-export function generateTilesFromTextures(centerData, edgeData, tileSize, biomeColors) {
+// ImageData (e.g. an AI snow texture) or null → a speckled edge is synthesized
+// from DARKENED AVERAGES of the center texture, so the border matches the
+// material's hue (the old palette-speckle edge gave e.g. a lava center pale
+// grass-green borders when the active biome was grass). The average — rather
+// than a per-pixel darkened copy of the center — keeps the border UNIFORM on
+// every side: AI images often carry bands/artifacts in their boundary rows,
+// and copying those made the top border differ from the bottom one. Always
+// autotiles correctly because tiles are composed (not cropped from an AI
+// sheet). `biomeColors` is kept for signature compatibility only.
+export function generateTilesFromTextures(centerData, edgeData, tileSize, biomeColors) { // eslint-disable-line no-unused-vars
   const s = tileSize
   const center = centerData.data
   const ew = Math.max(2, Math.round(s / 6))
@@ -228,10 +250,14 @@ export function generateTilesFromTextures(centerData, edgeData, tileSize, biomeC
   if (edgeData) {
     edge = edgeData.data
   } else {
+    let ar = 0, ag = 0, ab = 0
+    const count = s * s
+    for (let i = 0; i < center.length; i += 4) { ar += center[i]; ag += center[i + 1]; ab += center[i + 2] }
+    ar /= count; ag /= count; ab /= count
+    // Same darken levels as draw mode's exposed edges: base, shadow, highlight.
+    const tone = (f) => [Math.round(ar * f), Math.round(ag * f), Math.round(ab * f)]
+    const bo = tone(0.45), sh = tone(0.30), hi = tone(0.62)
     edge = new Uint8ClampedArray(s * s * 4)
-    const bo = hexToRGBA(biomeColors.border)
-    const sh = hexToRGBA(biomeColors.shadow)
-    const hi = hexToRGBA(biomeColors.highlight)
     for (let y = 0; y < s; y++) {
       for (let x = 0; x < s; x++) {
         const c = edgeColor(x, y, EDGE_SEED, bo, sh, hi)
@@ -272,14 +298,17 @@ export function generateTilesFromTextures(centerData, edgeData, tileSize, biomeC
 // treat the 48 ImageData tiles as read-only (compose/export/infer never mutate
 // them), which makes returning shared references safe.
 const biomeTilesCache = new Map()
-const BIOME_CACHE_MAX = 16
+// Animation frames share this cache (one entry per frame), so keep headroom
+// for a few biomes × up to 4 frames.
+const BIOME_CACHE_MAX = 24
 
-function biomeSignature(biome, tileSize) {
-  return `${tileSize}|${JSON.stringify(biome.colors)}|${JSON.stringify(biome.proceduralParams || null)}`
+function biomeSignature(biome, tileSize, frameSeed) {
+  return `${tileSize}|f${frameSeed}|${JSON.stringify(biome.colors)}|${JSON.stringify(biome.proceduralParams || null)}`
 }
 
-export function generateAllBiomeTiles(biome, tileSize) {
-  const sig = biomeSignature(biome, tileSize)
+// `frameSeed` 0 = the static sheet; 1..N = animation frame variants (see drawTile).
+export function generateAllBiomeTiles(biome, tileSize, frameSeed = 0) {
+  const sig = biomeSignature(biome, tileSize, frameSeed)
   const cached = biomeTilesCache.get(sig)
   if (cached) return cached
 
@@ -304,7 +333,7 @@ export function generateAllBiomeTiles(biome, tileSize) {
 
   for (const mask of validMasks) {
     const sheetIndex = BITMASK_TO_INDEX.get(mask)
-    tiles[sheetIndex] = drawTile(mask, tileSize, biome.colors, biome.proceduralParams)
+    tiles[sheetIndex] = drawTile(mask, tileSize, biome.colors, biome.proceduralParams, frameSeed)
   }
 
   if (biomeTilesCache.size >= BIOME_CACHE_MAX) {
