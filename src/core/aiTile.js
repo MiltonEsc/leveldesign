@@ -71,22 +71,24 @@ export function buildTilePrompt({
 
   // FLUX (fal) ignores instruction-style prompts, and negations backfire: with
   // T5/CLIP conditioning, mentioning "border" — even as "avoid drawing a
-  // border" — INCREASES the chance of a drawn border/vignette, which is exactly
-  // what breaks autotiling (every tile looks like an isolated blob). So for fal
-  // the prompt is a positive, caption-style description of a uniform repeating
-  // surface with no centered subject.
+  // border" — INCREASES the chance of a drawn border/vignette. Crucially,
+  // asking FLUX for "pixel art" pushes it toward SPRITES (a centered subject on
+  // a background), which breaks autotiling. So the fal prompt asks for a
+  // realistic/painted MATERIAL texture instead — the app's own downscale +
+  // sharpen + quantize pipeline is what turns it into pixel art — phrased as a
+  // positive caption with texture-map anchors FLUX understands well.
   if (provider === 'fal') {
     const material = role === 'edge'
       ? `${cleanedSubject}, used as a terrain border material${contextPrompt ? ` that visually matches ${contextPrompt.trim()}` : ''}`
       : cleanedSubject
     return [
-      `Seamless repeating pixel art texture of ${material}.`,
-      'Flat top-down view of a video-game terrain surface.',
-      'One single uniform pattern that fills the entire square image from edge to edge,',
-      'as if cropped from the middle of a much larger continuous surface.',
-      'The pattern continues identically past every edge of the image.',
-      'Flat even lighting across the whole image, limited color palette,',
-      `large readable pixel clusters that stay clear at ${tileSize}px.`,
+      `Seamless tileable texture of ${material}.`,
+      'Video game terrain texture map: a flat, top-down macro view of the material surface only.',
+      'The same uniform surface detail repeats across the entire square image;',
+      'every region of the image looks like every other region,',
+      'and the pattern flows continuously past all four edges.',
+      'Even, flat lighting across the whole frame.',
+      `Bold, chunky surface details in a limited color palette, still readable when shrunk to a ${tileSize} pixel game tile.`,
       palette ? `Color mood: ${palette}.` : '',
     ].filter(Boolean).join(' ')
   }
@@ -573,6 +575,43 @@ export function cropCenterRgba(data, width, height, frac) {
 // when prompted for a uniform texture; keeping only the central region cuts
 // that off before the downscale (the result is still ≥38× the largest tile).
 const FAL_CENTER_CROP = 0.6
+// When the image is clearly a centered blob/vignette (centre colour far from
+// the outer ring's), crop harder so we sample the blob's interior material.
+const FAL_BLOB_CROP = 0.4
+const VIGNETTE_THRESHOLD = 48
+
+// Mean RGB distance between the image's central box (middle 30%) and its outer
+// ring (outermost 12%). Uniform textures score near 0; centered blob/vignette
+// compositions score high. Sampled with a stride for speed. Exported for tests.
+export function vignetteScore(data, width, height) {
+  const cx0 = Math.floor(width * 0.35), cx1 = Math.ceil(width * 0.65)
+  const cy0 = Math.floor(height * 0.35), cy1 = Math.ceil(height * 0.65)
+  const ring = Math.max(1, Math.floor(Math.min(width, height) * 0.12))
+  const step = Math.max(1, Math.floor(Math.min(width, height) / 128))
+  let cr = 0, cg = 0, cb = 0, cn = 0
+  let rr = 0, rg = 0, rb = 0, rn = 0
+  for (let y = 0; y < height; y += step) {
+    for (let x = 0; x < width; x += step) {
+      const i = (y * width + x) * 4
+      if (x >= cx0 && x < cx1 && y >= cy0 && y < cy1) {
+        cr += data[i]; cg += data[i + 1]; cb += data[i + 2]; cn++
+      } else if (x < ring || x >= width - ring || y < ring || y >= height - ring) {
+        rr += data[i]; rg += data[i + 1]; rb += data[i + 2]; rn++
+      }
+    }
+  }
+  if (!cn || !rn) return 0
+  const dr = cr / cn - rr / rn
+  const dg = cg / cn - rg / rn
+  const db = cb / cn - rb / rn
+  return Math.sqrt(dr * dr + dg * dg + db * db)
+}
+
+// Crop fraction for a fal image: tighter when it reads as a centered blob.
+// Exported for tests.
+export function pickFalCropFraction(data, width, height) {
+  return vignetteScore(data, width, height) > VIGNETTE_THRESHOLD ? FAL_BLOB_CROP : FAL_CENTER_CROP
+}
 
 export async function generateBaseTileWithAI({
   prompt,
@@ -591,9 +630,11 @@ export async function generateBaseTileWithAI({
   const finalPrompt = buildTilePrompt({ subject: prompt, role, tileSize, paletteHint, contextPrompt, provider })
   const decoded = await generateImage({ prompt: finalPrompt, model, quality, outputFormat })
   // Props keep the full frame (a centered subject is the point there); this
-  // crop only runs on the tile path, for fal images.
+  // crop only runs on the tile path, for fal images. The fraction adapts:
+  // tighter when the image reads as a centered blob/vignette.
   const source = decoded.meta.provider === 'fal'
-    ? cropCenterRgba(decoded.data, decoded.width, decoded.height, FAL_CENTER_CROP)
+    ? cropCenterRgba(decoded.data, decoded.width, decoded.height,
+        pickFalCropFraction(decoded.data, decoded.width, decoded.height))
     : decoded
   const processed = postprocessTilePixels(source.data, source.width, source.height, tileSize, { dither })
 
